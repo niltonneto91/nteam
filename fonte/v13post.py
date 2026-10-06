@@ -43,6 +43,11 @@ R("<summary>${e.campos.length+e.mais} campo(s)</summary>","<summary>${(+e.campos
 R("${e.mais?`<li class=\"muted\">+ ${e.mais} outro(s) campo(s)</li>`:''}","${e.mais?`<li class=\"muted\">+ ${+e.mais||0} outro(s) campo(s)</li>`:''}",cnt=None)
 R('<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>','<script src="/vendor/chart-4.4.1.umd.min.js"></script>')
 
+
+# 4c. v14 · perfil Administrativo de obra e escopo por obra para todos, exceto RH e Diretoria
+R("gestor:{nome:'Gestor da obra',curto:'Gestor'},enc:{nome:'Encarregado de obra',curto:'Encarregado'}};","gestor:{nome:'Gestor da obra',curto:'Gestor'},enc:{nome:'Encarregado de obra',curto:'Encarregado'},adm:{nome:'Administrativo de obra',curto:'Adm. obra'}};")
+R("function escopo(){const p=pessoaAtual();return p.perfil==='gestor'||p.perfil==='enc'?(p.obras||[]):null}","function escopo(){const p=pessoaAtual();return ['rh','dir'].includes(p.perfil)?null:(p.obras||[])}")
+
 # 5. documento completo, app só roda depois do login
 R('<title>nTeam · NTN Engenharia</title>','<!doctype html>\n<html lang="pt-BR">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<meta name="robots" content="noindex,nofollow">\n<meta name="referrer" content="strict-origin-when-cross-origin">\n<title>nTeam · NTN Engenharia</title>')
 R('<div class="shell">','</head>\n<body>\n<div class="shell">')

@@ -5,42 +5,45 @@
 'use strict';
 const CFG={url:'https://yyylvkofbdhrlaizvoop.supabase.co',chave:'sb_publishable_r_jFrf7J221m5JevAJgbeg_b6wSiXem'};
 const sb=window.supabase.createClient(CFG.url,CFG.chave,{auth:{persistSession:true,autoRefreshToken:true,storageKey:'nteam-sessao',detectSessionInUrl:false}});
-const NUVEM=window.NUVEM={sb,cfg:CFG,usuario:null,versoes:{},texto:{},carregadas:new Set(),iniciado:false};
+const NUVEM=window.NUVEM={sb,cfg:CFG,usuario:null,reg:new Map(),iniciado:false};
 
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-/* ---------- montagem: junta as partes que o perfil pode ler ---------- */
-NUVEM.montar=function(partes){
-  const base=partes.base;if(!base)throw new Error('base_ausente');
-  const DB=base;
-  const pes=partes.pessoal?.colabs||{};
-  const sau=partes.saude||{};const sA=sau.atestados||{},sH=sau.hist||{};
-  for(const c of DB.colabs||[]){
-    const p=pes[c.id];if(p)Object.assign(c,p);
+/* ---------- montagem: junta os registros que o perfil pode ler (v14, por obra) ---------- */
+const COL_TIPO={colab:'colabs',req:'reqs',cand:'cands',hist:'hist',mob:'mobs',hosp:'hospedagens',estadia:'estadias',plano:'planos',tarefa:'tarefas',docobra:'docsObra',aval:'avaliacoes',lote:'lotesImport'};
+NUVEM.montar=function(rows){
+  const g=rows.find(r=>r.tipo==='global');if(!g)throw new Error('base_ausente');
+  const DB={v:4,...JSON.parse(JSON.stringify(g.dados)),colabs:[],tarefas:[],hist:[],mobs:[],hospedagens:[],estadias:[],planos:[],reqs:[],cands:[],avaliacoes:[],lotesImport:[],docsObra:[],avalRasc:{},pontoDia:[]};
+  DB.mobLog=DB.mobLog||[];DB.limpezas=DB.limpezas||{};DB.migracaoV4=DB.migracaoV4||{};
+  const por={};for(const r of rows)(por[r.tipo]??=[]).push(r);
+  for(const [tp,col] of Object.entries(COL_TIPO))for(const r of por[tp]||[])DB[col].push(JSON.parse(JSON.stringify(r.dados)));
+  const C=new Map(DB.colabs.map(c=>[c.id,c]));
+  for(const tp of ['pessoal','financeiro'])for(const r of por[tp]||[]){const c=C.get(r.id);if(c)Object.assign(c,r.dados)}
+  for(const r of por.saude||[]){const c=C.get(r.id);if(!c)continue;const sA=r.dados.atestados||{},sH=r.dados.hist||{};
     for(const lista of [c.atestados||[],c.atestadosCanc||[]])for(const a of lista){const s=sA[a.id];if(!s)continue;
       if(s.tipo)a.tipo=s.tipo;for(const k of ['cid','medico','arquivo'])if(s[k]!=null)a[k]=s[k];
       if(s.versoes)a.versoes=s.versoes;if(s.motivoCanc!=null&&a.cancelado)a.cancelado.motivo=s.motivoCanc}
-    for(const h of c.historico||[])if(h.hid&&sH[h.hid]!=null)h.texto=sH[h.hid];
-  }
-  DB.pontoDia=[];
-  Object.keys(partes).filter(k=>k.startsWith('ponto:')).sort().forEach(k=>{for(const x of partes[k]||[])DB.pontoDia.push(x)});
+    for(const h of c.historico||[])if(h.hid&&sH[h.hid]!=null)h.texto=sH[h.hid]}
+  for(const r of por.avalrasc||[])DB.avalRasc[r.id]=r.dados;
+  for(const r of (por.ponto||[]).sort((a,b)=>a.id.localeCompare(b.id)))for(const x of r.dados||[])DB.pontoDia.push(x);
   return DB;
 };
-
-NUVEM.lerPartes=async function(){
-  const {data,error}=await sb.from('documento').select('parte,dados,versao');
-  if(error)throw error;
-  const partes={};NUVEM.versoes={};NUVEM.texto={};NUVEM.carregadas=new Set();
-  for(const r of data){partes[r.parte]=r.dados;NUVEM.versoes[r.parte]=r.versao;NUVEM.texto[r.parte]=JSON.stringify(r.dados);NUVEM.carregadas.add(r.parte)}
-  return partes;
+NUVEM.lerRegistros=async function(){
+  const rows=[];const N=1000;
+  for(let i=0;;i+=N){
+    const {data,error}=await sb.from('registro').select('tipo,id,obras,dados,versao').order('criado_em',{ascending:true}).order('tipo').order('id').range(i,i+N-1);
+    if(error)throw error;rows.push(...data);if(data.length<N)break;
+  }
+  NUVEM.reg=new Map(rows.map(r=>[r.tipo+'|'+r.id,{v:r.versao,t:JSON.stringify({o:r.obras,d:r.dados})}]));
+  return rows;
 };
 
 NUVEM.lerAuditoria=async function(){
   if(!['rh','dir'].includes(NUVEM.usuario.perfil))return [];
   const {data,error}=await sb.from('auditoria').select('id,em,autor_id,autor_nome,autor_perfil,evento').order('id',{ascending:false}).limit(5000);
   if(error){console.error('auditoria',error);return []}
-  const NOMES={rh:'Analista de RH',sst:'Segurança do trabalho',dir:'Diretoria',gestor:'Gestor da obra',enc:'Encarregado de obra'};
+  const NOMES={rh:'Analista de RH',sst:'Segurança do trabalho',dir:'Diretoria',gestor:'Gestor da obra',enc:'Encarregado de obra',adm:'Administrativo de obra'};
   const txt=(v,n=300)=>typeof v==='string'?v.slice(0,n):v==null?'':String(v).slice(0,n);
   const OPS=new Set(['','incluiu','removeu','alterou']);
   return data.reverse().map(r=>{const ev=r.evento&&typeof r.evento==='object'?r.evento:{};
@@ -118,8 +121,8 @@ async function iniciar(){
   if(!p||!p.ativo)return telaErro('Acesso não liberado','Seu usuário não tem um perfil ativo no nTeam. Fale com o RH ou com a Diretoria.');
   if(p.trocar_senha)return telaNovaSenha();
   NUVEM.usuario={id:p.user_id,nome:p.nome,email:p.email,perfil:p.perfil,obras:p.obras||[],pessoaId:p.pessoa_id||('u-'+p.user_id.slice(0,8)),adminTotal:!!p.admin_total};
-  let partes;try{partes=await NUVEM.lerPartes()}catch(e){console.error(e);return telaErro('Não foi possível carregar os dados','Verifique a internet e tente de novo.',false)}
-  let DB;try{DB=NUVEM.montar(partes)}catch(e){console.error(e);return telaErro('Base de dados não encontrada','A base do nTeam ainda não foi inicializada. Fale com o administrador.')}
+  let regs;try{regs=await NUVEM.lerRegistros()}catch(e){console.error(e);return telaErro('Não foi possível carregar os dados','Verifique a internet e tente de novo.',false)}
+  let DB;try{DB=NUVEM.montar(regs)}catch(e){console.error(e);return telaErro('Base de dados não encontrada','A base do nTeam ainda não foi inicializada. Fale com o administrador.')}
   /* garante a pessoa do usuário logado no cadastro de pessoas, com perfil e obras do servidor */
   const u=NUVEM.usuario;DB.cfg.pessoas=DB.cfg.pessoas||[];
   let pe=DB.cfg.pessoas.find(x=>x.id===u.pessoaId);

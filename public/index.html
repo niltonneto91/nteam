@@ -3154,7 +3154,7 @@ document.addEventListener('submit',e=>{
    Simulação de perfil no protótipo: as restrições valem só na tela.
    Não há login nem verificação no servidor.
    ===================================================================== */
-const PERFIS={rh:{nome:'Analista de RH',curto:'RH'},sst:{nome:'Segurança do trabalho',curto:'SST'},dir:{nome:'Diretoria',curto:'Diretoria'},gestor:{nome:'Gestor da obra',curto:'Gestor'},enc:{nome:'Encarregado de obra',curto:'Encarregado'}};
+const PERFIS={rh:{nome:'Analista de RH',curto:'RH'},sst:{nome:'Segurança do trabalho',curto:'SST'},dir:{nome:'Diretoria',curto:'Diretoria'},gestor:{nome:'Gestor da obra',curto:'Gestor'},enc:{nome:'Encarregado de obra',curto:'Encarregado'},adm:{nome:'Administrativo de obra',curto:'Adm. obra'}};
 const PERM_DEF=[
   ['verDadosPessoais','Ver dados pessoais completos (CPF, endereço, banco, dependentes)','Visualizar',['rh','dir']],
   ['verFinanceiro','Ver salários, benefícios, valores e custos','Visualizar',['rh','dir']],
@@ -3199,7 +3199,7 @@ function pode(k){const l=DB?.cfg?.perms?.[k];return !!l&&l.includes(UI.perfil)}
 function pessoa(id){return (DB.cfg.pessoas||[]).find(p=>p.id===id)}
 function pessoasPerfil(pf){return (DB.cfg.pessoas||[]).filter(p=>p.perfil===pf)}
 function pessoaAtual(){return pessoa(UI.pessoa)||pessoasPerfil(UI.perfil)[0]||{id:'',nome:PERFIS[UI.perfil]?.nome||'Usuário',perfil:UI.perfil,obras:[]}}
-function escopo(){const p=pessoaAtual();return p.perfil==='gestor'||p.perfil==='enc'?(p.obras||[]):null}
+function escopo(){const p=pessoaAtual();return ['rh','dir'].includes(p.perfil)?null:(p.obras||[])}
 const noEscopo=o=>{const e=escopo();return !e||e.includes(o)};
 function noEscopoC(c){const e=escopo();if(!e)return true;if(!c)return false;if(e.includes(c.obraId))return true;return (c.alocacoes||[]).some(a=>a.status!=='proposta'&&e.includes(a.obraId)&&a.inicio<=addD(hoje,90)&&(!a.fim||a.fim>=hoje))}
 function obraUnica(){const e=escopo();return e&&e.length===1?e[0]:null}
@@ -6695,26 +6695,45 @@ const NAO_CLINICO=t=>/^(Acidente de trabalho|Declaração de comparecimento)/.te
 function vazioDe(v){if(v==null)return v;if(Array.isArray(v))return [];if(typeof v==='object'){const o={};for(const k in v)o[k]=vazioDe(v[k]);return o}if(typeof v==='string')return '';if(typeof v==='number')return null;if(typeof v==='boolean')return false;return null}
 
 /* divide a base em partes; nada de pessoal ou clínico fica na parte 'base' */
+/* v14 · cada registro com as obras que podem vê-lo; nada pessoal, financeiro ou clínico fica no registro do colaborador */
+const FIN_CAMPOS=['salario','peric','insal','beneficios'];
+const PESSOAL_SO=PESSOAL_CAMPOS.filter(k=>!FIN_CAMPOS.includes(k));
+const TIPO_COL={colabs:'colab',reqs:'req',cands:'cand',hist:'hist',mobs:'mob',hospedagens:'hosp',estadias:'estadia',planos:'plano',tarefas:'tarefa',docsObra:'docobra',avaliacoes:'aval',lotesImport:'lote'};
+function obrasColab(c){const s=new Set();if(c&&c.obraId)s.add(c.obraId);for(const a of (c&&c.alocacoes)||[])if(a&&a.obraId&&(!a.fim||a.fim>=hoje))s.add(a.obraId);return [...s].sort()}
+function obrasDe(rec,col){
+  if(col==='colabs')return obrasColab(rec);
+  if(col==='lotesImport')return [];
+  const s=new Set();
+  if(rec.obraId)s.add(rec.obraId);
+  if(Array.isArray(rec.obraIds))rec.obraIds.forEach(x=>x&&s.add(x));
+  if(rec.colabId)obrasColab(C(rec.colabId)).forEach(x=>s.add(x));
+  if(rec.reqId){const r=DB.reqs.find(x=>x.id===rec.reqId);if(r&&r.obraId)s.add(r.obraId)}
+  for(const k of ['hospId','unidadeId','hospedagemId'])if(rec[k]){const h=DB.hospedagens.find(x=>x.id===rec[k]);((h&&h.obraIds)||[]).forEach(x=>s.add(x))}
+  return [...s].sort();
+}
 function dividirNuvem(){
   for(const c of DB.colabs)for(const h of c.historico||[])if((h.tipo==='Atestado'||h.saude)&&!h.hid)h.hid=uid();
-  const base=JSON.parse(JSON.stringify(DB));
-  const pessoal={colabs:{}},saude={atestados:{},hist:{}},ponto={};
-  for(const x of base.pontoDia||[]){const m=String(x.data||'').slice(0,7);if(/^\d{4}-(0[1-9]|1[0-2])$/.test(m))(ponto['ponto:'+m]??=[]).push(x)}
-  base.pontoDia=[];
-  for(const c of base.colabs){
-    const p={};for(const k of PESSOAL_CAMPOS)if(k in c){p[k]=c[k];c[k]=vazioDe(c[k])}
-    pessoal.colabs[c.id]=p;
-    for(const lista of [c.atestados||[],c.atestadosCanc||[]])for(const a of lista){const s={};
-      if(a.tipo&&!NAO_CLINICO(a.tipo)){s.tipo=a.tipo;a.tipo=''}
-      for(const k of ['cid','medico','arquivo'])if(a[k]){s[k]=a[k];a[k]=''}
-      if(a.versoes?.length){s.versoes=a.versoes;a.versoes=a.versoes.map(v=>({data:v.data,autor:v.autor}))}
-      if(a.cancelado&&a.cancelado.motivo){s.motivoCanc=a.cancelado.motivo;a.cancelado={...a.cancelado,motivo:''}}
-      if(Object.keys(s).length)saude.atestados[a.id]=s}
-    for(const h of c.historico||[])if(h.hid){saude.hist[h.hid]=h.texto;h.texto=semClinico(h.texto)}
+  const out=new Map();const put=(tipo,id,obras,dados)=>out.set(tipo+'|'+id,{tipo,id:String(id),obras,dados});
+  put('global','principal',[],{v:DB.v,cfg:DB.cfg,limpezas:DB.limpezas||{},migracaoV4:DB.migracaoV4||{},mobLog:DB.mobLog||[]});
+  for(const [col,tipo] of Object.entries(TIPO_COL))for(const rec of DB[col]||[]){if(!rec||typeof rec!=='object')continue;if(!rec.id)rec.id=uid();
+    if(col!=='colabs'){put(tipo,rec.id,obrasDe(rec,col),rec);continue}
+    const c=JSON.parse(JSON.stringify(rec));const ob=obrasColab(rec);
+    const p={},f={};for(const k of PESSOAL_SO)if(k in c){p[k]=c[k];c[k]=vazioDe(c[k])}for(const k of FIN_CAMPOS)if(k in c){f[k]=c[k];c[k]=vazioDe(c[k])}
+    const s={atestados:{},hist:{}};
+    for(const lista of [c.atestados||[],c.atestadosCanc||[]])for(const a of lista){const x={};
+      if(a.tipo&&!NAO_CLINICO(a.tipo)){x.tipo=a.tipo;a.tipo=''}
+      for(const k of ['cid','medico','arquivo'])if(a[k]){x[k]=a[k];a[k]=''}
+      if(a.versoes&&a.versoes.length){x.versoes=a.versoes;a.versoes=a.versoes.map(v=>({data:v.data,autor:v.autor}))}
+      if(a.cancelado&&a.cancelado.motivo){x.motivoCanc=a.cancelado.motivo;a.cancelado={...a.cancelado,motivo:''}}
+      if(Object.keys(x).length)s.atestados[a.id]=x}
+    for(const h of c.historico||[])if(h.hid){s.hist[h.hid]=h.texto;h.texto=semClinico(h.texto)}
+    put('colab',c.id,ob,c);put('pessoal',c.id,ob,p);put('financeiro',c.id,ob,f);put('saude',c.id,ob,s);
   }
-  return {base,pessoal,saude,...ponto};
+  for(const [k,v] of Object.entries(DB.avalRasc||{})){const c=C(k);put('avalrasc',k,obrasColab(c),v)}
+  const pm={};for(const x of DB.pontoDia||[]){const m=String(x.data||'').slice(0,7);if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(m))continue;const k=(x.obraId||'sem-obra')+'|'+m;(pm[k]??=[]).push(x)}
+  for(const [k,l] of Object.entries(pm))put('ponto',k,k.startsWith('sem-obra|')?[]:[k.split('|')[0]],l);
+  return out;
 }
-
 
 /* combinação em três vias: base = última versão sincronizada; local = minha; remoto = servidor */
 const igualJ=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
@@ -6735,12 +6754,13 @@ function combinar3(b,l,r){
 }
 const NV={timer:null,salvando:false,pendente:false,tentativas:0,erro:'',ultimo:null,audFila:[],audEnviando:false};
 const meuPerfil=()=>NUVEM.usuario.perfil;
-function podeGravarParte(p){
-  if(p==='base')return true;
-  if(p==='pessoal')return ['rh','dir'].includes(meuPerfil())&&NUVEM.carregadas.has('pessoal');
-  if(p==='saude')return ['rh','sst'].includes(meuPerfil())&&NUVEM.carregadas.has('saude');
-  if(p.startsWith('ponto:'))return ['rh','dir','gestor'].includes(meuPerfil());
-  return false;
+function podeGravarTipo(tp){const p=meuPerfil();
+  if(tp==='financeiro'||tp==='lote')return ['rh','dir'].includes(p);
+  if(tp==='pessoal')return ['rh','dir','adm'].includes(p);
+  if(tp==='saude')return ['rh','sst','adm'].includes(p);
+  if(tp==='ponto')return ['rh','dir','gestor','adm'].includes(p);
+  if(['aval','avalrasc','cand'].includes(tp))return ['rh','dir','gestor','adm'].includes(p);
+  return true;
 }
 function indicadorNuvem(){const el=document.getElementById('nv-status');if(!el)return;
   const h=d=>d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
@@ -6751,30 +6771,36 @@ async function salvarNuvem(){
   if(NV.salvando){clearTimeout(NV.timer);NV.timer=setTimeout(salvarNuvem,400);return}
   NV.salvando=true;NV.pendente=false;indicadorNuvem();
   try{
-    const partes=dividirNuvem();
-    const fila=[];
-    for(const [p,d] of Object.entries(partes))if(podeGravarParte(p)&&JSON.stringify(d)!==NUVEM.texto[p])fila.push([p,d]);
-    for(const p of NUVEM.carregadas)if(p.startsWith('ponto:')&&!(p in partes)&&NUVEM.texto[p]!=='[]'&&podeGravarParte(p))fila.push([p,[]]);
+    const novos=dividirNuvem();
+    let itens=[];
+    for(const [k,r] of novos){if(!podeGravarTipo(r.tipo))continue;const txt=JSON.stringify({o:r.obras,d:r.dados});const ant=NUVEM.reg.get(k);
+      if(ant&&ant.t===txt)continue;itens.push({tipo:r.tipo,id:r.id,obras:r.obras,dados:r.dados,versao:ant?ant.v:0,_k:k,_t:txt})}
+    for(const [k,ant] of NUVEM.reg){if(novos.has(k))continue;const [tp,...rest]=k.split('|');if(tp==='global'||!podeGravarTipo(tp))continue;
+      itens.push({tipo:tp,id:rest.join('|'),versao:ant.v,excluir:true,_k:k})}
     let combinou=false;NV.colisoes=0;
-    for(let [p,d] of fila){
-      for(let tentativa=0;;tentativa++){
-        const {data:v,error}=await NUVEM.sb.rpc('salvar_parte',{p_parte:p,p_dados:d,p_versao:NUVEM.versoes[p]||0});
-        if(!error){NUVEM.versoes[p]=v;NUVEM.texto[p]=JSON.stringify(d);NUVEM.carregadas.add(p);break}
-        const conflito=error.code==='40001'||/conflito/.test(error.message||'');
-        if(!conflito||tentativa>=3)throw Object.assign(new Error(error.message||'erro'),{codigo:error.code,parte:p,status:error.status});
-        /* outra pessoa salvou antes: combina registro a registro e tenta de novo */
-        const {data:srv,error:e2}=await NUVEM.sb.from('documento').select('dados,versao').eq('parte',p).maybeSingle();
-        if(e2)throw Object.assign(new Error(e2.message),{codigo:e2.code,parte:p});
-        const base=NUVEM.texto[p]?JSON.parse(NUVEM.texto[p]):(Array.isArray(d)?[]:{});
-        d=combinar3(base,d,srv?srv.dados:(Array.isArray(d)?[]:{}));NUVEM.versoes[p]=srv?srv.versao:0;combinou=true;
-      }
+    for(let tentativa=0;itens.length;tentativa++){
+      const {data,error}=await NUVEM.sb.rpc('salvar_registros',{p_itens:itens.map(({_k,_t,...x})=>x)});
+      if(!error){const mapa=new Map(data.map(x=>[x.tipo+'|'+x.id,x.versao]));
+        for(const it of itens){if(it.excluir)NUVEM.reg.delete(it._k);else NUVEM.reg.set(it._k,{v:mapa.get(it._k),t:it._t})}break}
+      const conflito=error.code==='40001'||/conflito/.test(error.message||'');
+      if(!conflito||tentativa>=5)throw Object.assign(new Error(error.message||'erro'),{codigo:error.code,status:error.status,det:error.details});
+      /* outra pessoa salvou antes: busca o registro, combina e tenta de novo */
+      let alvo={};try{alvo=JSON.parse(error.details||'{}')}catch(x){}
+      const k=alvo.tipo+'|'+alvo.id;const it=itens.find(x=>x._k===k);if(!it)throw Object.assign(new Error('conflito sem registro'),{codigo:'40001'});
+      const {data:srv,error:e2}=await NUVEM.sb.from('registro').select('obras,dados,versao').eq('tipo',alvo.tipo).eq('id',alvo.id).maybeSingle();
+      if(e2)throw Object.assign(new Error(e2.message),{codigo:e2.code});
+      combinou=true;
+      if(it.excluir){itens=itens.filter(x=>x!==it);if(srv)NUVEM.reg.set(k,{v:srv.versao,t:JSON.stringify({o:srv.obras,d:srv.dados})});continue}
+      const ant=NUVEM.reg.get(k);const base=ant?JSON.parse(ant.t).d:(Array.isArray(it.dados)?[]:{});
+      if(srv){it.dados=combinar3(base,it.dados,srv.dados);it.versao=srv.versao}else it.versao=0;
+      it._t=JSON.stringify({o:it.obras,d:it.dados});
     }
     if(combinou){await recarregarNuvem();
       if(NV.colisoes)modalInfo('Você e outra pessoa alteraram o mesmo registro','<p style="margin-top:0">As alterações de vocês dois foram combinadas. Onde os dois mudaram o mesmo item ao mesmo tempo, ficou a sua versão. Confira se está tudo certo.</p>');
       else toast('Suas alterações foram combinadas com as de outra pessoa.')}
-    NV.tentativas=0;NV.erro='';if(fila.length||!NV.ultimo)NV.ultimo=new Date();
+    NV.tentativas=0;NV.erro='';NV.ultimo=new Date();
   }catch(e){
-    console.error(JSON.stringify({nivel:'erro',etapa:'salvar_parte',parte:e.parte,codigo:e.codigo,msg:e.message}));
+    console.error(JSON.stringify({nivel:'erro',etapa:'salvar_registros',codigo:e.codigo,msg:e.message,det:e.det}));
     if(e.codigo==='40001'||/conflito/.test(e.message)){NV.erro='';await conflitoNuvem()}
     else if(e.codigo==='42501'||/sem_permissao|permission/i.test(e.message)){NV.erro='';toast('Seu perfil não pode gravar parte desta alteração. Os dados foram recarregados do servidor.',true);await recarregarNuvem()}
     else if(/JWT|jwt|expired|401/.test(e.message+(e.status||''))){const {error:er}=await NUVEM.sb.auth.refreshSession();if(er){NV.erro='Sessão expirada. Entre de novo para salvar.';setTimeout(()=>NUVEM.sair(),4000)}else{NV.pendente=true;NV.timer=setTimeout(salvarNuvem,300)}}
@@ -6784,7 +6810,7 @@ async function salvarNuvem(){
 function garantirPessoaNuvem(d){const u=NUVEM.usuario;d.cfg.pessoas=d.cfg.pessoas||[];let pe=d.cfg.pessoas.find(x=>x.id===u.pessoaId);
   if(!pe){pe={id:u.pessoaId,nome:u.nome,perfil:u.perfil,cargo:'',obras:u.obras};d.cfg.pessoas.push(pe)}pe.perfil=u.perfil;pe.obras=u.obras;return d}
 async function recarregarNuvem(){
-  try{const partes=await NUVEM.lerPartes();DB=garantirPessoaNuvem(NUVEM.montar(partes));DBV++;CACHE.clear();AUD_BASE=clone(DB);render()}
+  try{const regs=await NUVEM.lerRegistros();DB=garantirPessoaNuvem(NUVEM.montar(regs));DBV++;CACHE.clear();AUD_BASE=clone(DB);render()}
   catch(e){console.error(e);NV.erro='Não foi possível recarregar os dados. Verifique a internet.';indicadorNuvem()}
 }
 async function conflitoNuvem(){
@@ -6797,9 +6823,9 @@ function tentarAtualizarNuvem(){clearTimeout(NV.tr);
   if(ocupado){NV.tr=setTimeout(tentarAtualizarNuvem,3000);return}
   recarregarNuvem().then(()=>toast('Tela atualizada com alterações de outra pessoa.'));
 }
-try{NUVEM.sb.channel('nteam-versoes').on('postgres_changes',{event:'*',schema:'public',table:'versoes'},pl=>{const r=pl.new;if(!r||!r.parte)return;
-  if((NUVEM.versoes[r.parte]||0)>=r.versao)return;if(r.atualizado_por===NUVEM.usuario.id&&!NV.pendente)return;tentarAtualizarNuvem()}).subscribe()}catch(e){console.error('realtime',e)}
-
+try{NUVEM.sb.channel('nteam-registros').on('postgres_changes',{event:'*',schema:'public',table:'registro'},pl=>{const r=pl.new&&pl.new.tipo?pl.new:pl.old;if(!r||!r.tipo)return;
+  const ant=NUVEM.reg.get(r.tipo+'|'+r.id);if(pl.eventType!=='DELETE'&&ant&&ant.v>=r.versao)return;if(pl.eventType==='DELETE'&&!ant)return;
+  clearTimeout(NV.rt);NV.rt=setTimeout(tentarAtualizarNuvem,1200)}).subscribe()}catch(e){console.error('realtime',e)}
 /* auditoria no servidor */
 let AUD_ENVIADOS=(window.NTEAM_AUD||[]).length;
 NUVEM.audEnviar=function(){const novos=AUD.slice(AUD_ENVIADOS);AUD_ENVIADOS=AUD.length;if(!novos.length)return;
@@ -6846,14 +6872,14 @@ cfgPerfis=function(){const g=DB.cfg;const eu=NUVEM.usuario.id;
       (proprio?'<span class="muted" style="font-size:12px">Você</span>':bloqueado?'<span class="muted" style="font-size:12px">Só a Diretoria altera</span>':
       `<div class="actions"><button class="btn small ghost" data-act="acessoSenha" data-u="${a.user_id}">Redefinir senha</button>${a.ativo?`<button class="btn small ghost danger" data-act="acessoDesativar" data-u="${a.user_id}">Desativar</button>`:`<button class="btn small ghost" data-act="acessoReativar" data-u="${a.user_id}">Reativar</button>`}</div>`);
     const dis=bloqueado?'disabled':'';
-    return `<tr><td><input class="inp" value="${esc(p.nome)}" data-cfg="pessoas.${i}.nome" ${dis} aria-label="Nome"></td><td><input class="inp" value="${esc(p.cargo||'')}" data-cfg="pessoas.${i}.cargo" ${dis} aria-label="Cargo"></td><td><select class="inp" data-cfg="pessoas.${i}.perfil" ${dis} aria-label="Perfil">${Object.entries(PERFIS).filter(([k])=>k!=='dir'||meuPerfil()==='dir'||p.perfil==='dir').map(([k,v])=>`<option value="${k}" ${p.perfil===k?'selected':''}>${v.nome}</option>`).join('')}</select></td><td>${['gestor','enc'].includes(p.perfil)?`<div class="chkgrid">${g.obras.filter(o=>o.status==='Ativa').map(o=>`<label><input type="checkbox" data-cfgpobra="${i}" value="${o.id}" ${(p.obras||[]).includes(o.id)?'checked':''} ${dis}>${esc(obraCurta(o.id))}</label>`).join('')||'<span class="muted">cadastre as obras primeiro</span>'}</div>`:'<span class="muted">todas</span>'}</td><td>${acesso}</td></tr>`};
+    return `<tr><td><input class="inp" value="${esc(p.nome)}" data-cfg="pessoas.${i}.nome" ${dis} aria-label="Nome"></td><td><input class="inp" value="${esc(p.cargo||'')}" data-cfg="pessoas.${i}.cargo" ${dis} aria-label="Cargo"></td><td><select class="inp" data-cfg="pessoas.${i}.perfil" ${dis} aria-label="Perfil">${Object.entries(PERFIS).filter(([k])=>k!=='dir'||meuPerfil()==='dir'||p.perfil==='dir').map(([k,v])=>`<option value="${k}" ${p.perfil===k?'selected':''}>${v.nome}</option>`).join('')}</select></td><td>${!['rh','dir'].includes(p.perfil)?`<div class="chkgrid">${g.obras.map(o=>`<label><input type="checkbox" data-cfgpobra="${i}" value="${o.id}" ${(p.obras||[]).includes(o.id)?'checked':''} ${dis}>${esc(obraCurta(o.id))}</label>`).join('')||'<span class="muted">cadastre as obras primeiro</span>'}</div>${g.obras.length&&!dis?`<button type="button" class="btn small ghost" data-act="obrasTodas" data-i="${i}" style="margin-top:6px">Marcar todas as obras atuais</button>`:''}${(p.obras||[]).length?'':'<div class="muted" style="font-size:12px;margin-top:4px">Nenhuma obra liberada: não vê dados de obra.</div>'}`:'<span class="muted">todas (sempre)</span>'}</td><td>${acesso}</td></tr>`};
   const html=cfgPerfisV12();
-  const tabela=`<section class="panel" style="grid-column:1/-1"><div class="panel-h"><h3>Pessoas e acessos</h3><span class="sub">responsáveis nominais e usuários do sistema</span><span class="grow" style="flex:1"></span><button class="btn small" data-act="addPessoa">+ Adicionar pessoa</button></div><div class="tbl-wrap"><table><thead><tr><th>Nome</th><th>Cargo</th><th>Perfil</th><th>Obras (gestor e encarregado)</th><th>Acesso ao sistema</th></tr></thead><tbody>${(g.pessoas||[]).map(linha).join('')}</tbody></table></div><div class="panel-b"><p class="note" style="margin:0">Para dar acesso, cadastre a pessoa, escolha o perfil e clique em <b>Criar acesso</b>. O sistema gera uma senha temporária para você enviar; no primeiro acesso a pessoa cria a própria senha. O perfil e as obras valem também no servidor.</p></div></section>`;
-  return tabela+html.slice(html.indexOf('</section>')+10).replace(/<p class="note" style="margin:0"><b>Limitação do protótipo:<\/b>[\s\S]*?<\/p>/,'<p class="note" style="margin:0">Esta matriz controla o que cada perfil vê e faz nas telas. Independentemente dela, o servidor só entrega dados pessoais, bancários e salários para RH e Diretoria; dados de saúde para RH e SST; e ponto para RH, Diretoria e Gestor.</p>');
+  const tabela=`<section class="panel" style="grid-column:1/-1"><div class="panel-h"><h3>Pessoas e acessos</h3><span class="sub">responsáveis nominais e usuários do sistema</span><span class="grow" style="flex:1"></span><button class="btn small" data-act="addPessoa">+ Adicionar pessoa</button></div><div class="tbl-wrap"><table><thead><tr><th>Nome</th><th>Cargo</th><th>Perfil</th><th>Obras liberadas</th><th>Acesso ao sistema</th></tr></thead><tbody>${(g.pessoas||[]).map(linha).join('')}</tbody></table></div><div class="panel-b"><p class="note" style="margin:0">Para dar acesso, cadastre a pessoa, escolha o perfil e clique em <b>Criar acesso</b>. O sistema gera uma senha temporária para você enviar; no primeiro acesso a pessoa cria a própria senha. O perfil e as obras liberadas valem também no servidor: Diretoria e RH veem todas as obras; os demais perfis só recebem os dados das obras marcadas. Obra nova fica visível só para Diretoria e RH até ser liberada.</p></div></section>`;
+  return tabela+html.slice(html.indexOf('</section>')+10).replace(/<p class="note" style="margin:0"><b>Limitação do protótipo:<\/b>[\s\S]*?<\/p>/,'<p class="note" style="margin:0">Esta matriz controla o que cada perfil vê e faz nas telas. Independentemente dela, o servidor aplica as regras por obra: salário só para RH e Diretoria; dados pessoais para RH, Diretoria e Administrativo da obra; saúde para RH e para SST e Administrativo da obra; ponto para RH, Diretoria, Gestor e Administrativo da obra.</p>');
 };
 /* perfil e obras da pessoa com acesso também mudam no servidor */
 async function sincronizarAcessoNuvem(i){const p=DB.cfg.pessoas[i];if(!p)return;const a=acessoDe(p);if(!a)return;
-  const novo={nome:p.nome,perfil:p.perfil,obras:['gestor','enc'].includes(p.perfil)?(p.obras||[]):[]};
+  const novo={nome:p.nome,perfil:p.perfil,obras:!['rh','dir'].includes(p.perfil)?(p.obras||[]):[]};
   const {error}=await NUVEM.sb.from('perfis').update(novo).eq('user_id',a.user_id);
   if(error){toast(/so_diretoria/.test(error.message)?'Só a Diretoria concede ou altera o perfil Diretoria.':'Não foi possível atualizar o acesso no servidor.',true);p.perfil=a.perfil;p.obras=a.obras;save();render();return}
   Object.assign(a,novo);toast('Acesso atualizado: vale a partir do próximo login da pessoa.')}
@@ -6886,9 +6912,9 @@ Object.assign(ACT,{
     NUVEM.sb.auth.updateUser({password:fd.s1}).then(({error})=>toast(error?'Não foi possível trocar a senha: use uma senha diferente da atual e com letras e números.':'Senha alterada.',!!error))}),
   acessoCriar:a=>{const p=DB.cfg.pessoas[+a.dataset.i];if(!p)return;
     if(p.perfil==='dir'&&meuPerfil()!=='dir')return toast('Só a Diretoria cria acesso com perfil Diretoria.',true);
-    modal('Criar acesso',`<p class="full" style="margin:0"><b>${esc(p.nome)}</b> · ${esc(PERFIS[p.perfil]?.nome||'')}${['gestor','enc'].includes(p.perfil)?' · obras: '+esc((p.obras||[]).map(nomeObra).join(', ')||'nenhuma'):''}</p><div class="field full"><label for="nv-email">E-mail de acesso</label><input class="inp" id="nv-email" name="email" type="email" required autocomplete="off"></div>`,'Criar acesso',fd=>{
+    modal('Criar acesso',`<p class="full" style="margin:0"><b>${esc(p.nome)}</b> · ${esc(PERFIS[p.perfil]?.nome||'')}${!['rh','dir'].includes(p.perfil)?' · obras: '+esc((p.obras||[]).map(nomeObra).join(', ')||'nenhuma'):''}</p><div class="field full"><label for="nv-email">E-mail de acesso</label><input class="inp" id="nv-email" name="email" type="email" required autocomplete="off"></div>`,'Criar acesso',fd=>{
       const email=String(fd.email||'').trim().toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email))return toast('Informe um e-mail válido.',true),false;
-      chamarAcesso({acao:'criar',email,nome:p.nome,perfil:p.perfil,obras:['gestor','enc'].includes(p.perfil)?(p.obras||[]):[],pessoa_id:p.id}).then(r=>{
+      chamarAcesso({acao:'criar',email,nome:p.nome,perfil:p.perfil,obras:!['rh','dir'].includes(p.perfil)?(p.obras||[]):[],pessoa_id:p.id}).then(r=>{
         if(!r.ok)return toast(r.mensagem,true);lerPerfisNuvem();mostrarSenhaNuvem('Acesso criado',p.nome,email,r.senha_temporaria)})})},
   acessoSenha:a=>{const x=NUVEM.perfisLista.find(y=>y.user_id===a.dataset.u);if(!x)return;
     modalD(`Redefinir a senha de ${x.nome}?`,'<p class="full" style="margin:0">A senha atual deixa de valer. O sistema gera uma senha temporária para você enviar à pessoa.</p>','Redefinir senha',()=>chamarAcesso({acao:'redefinir',user_id:x.user_id}).then(r=>{if(!r.ok)return toast(r.mensagem,true);lerPerfisNuvem();mostrarSenhaNuvem('Senha redefinida',x.nome,x.email,r.senha_temporaria)}))},
@@ -6902,6 +6928,7 @@ Object.assign(ACT,{
   apagarAntigos:()=>{const o=document.getElementById('nv-oque')?.value,d=document.getElementById('nv-antes')?.value;
     if(!d)return toast('Escolha a data.',true);if(d>addD(hoje,-30))return toast('Só é possível apagar registros com mais de 30 dias.',true);
     modalD(`Apagar ${o==='historico'?'as cópias de versões':'os eventos de auditoria'} anteriores a ${fmt(d)}?`,'<p class="full" style="margin:0">Esta exclusão é definitiva e não pode ser desfeita. Ela fica registrada na auditoria.</p>','Apagar definitivamente',()=>NUVEM.sb.rpc('apagar_registros_antigos',{p_antes:d,p_o_que:o}).then(({data,error})=>toast(error?'Não foi possível apagar: '+(error.message.includes('sem_permissao')?'só o administrador total pode fazer isso.':'tente de novo.'):`${data} registro(s) apagado(s).`,!!error)))},
+  obrasTodas:a=>{const p=DB.cfg.pessoas[+a.dataset.i];if(!p)return;p.obras=DB.cfg.obras.map(o=>o.id);save();render();setTimeout(()=>sincronizarAcessoNuvem(+a.dataset.i),50)},
   reset:()=>toast('Indisponível: os dados ficam no servidor.',true),
 });
 

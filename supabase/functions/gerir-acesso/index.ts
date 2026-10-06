@@ -9,8 +9,8 @@ const SRK = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 // Origem do app publicado.
 const ORIGENS = new Set(["https://nteam.vercel.app"]);
 const ORIGEM_OK = (o: string | null) => !!o && ORIGENS.has(o);
-const PERFIS = ["rh", "sst", "dir", "gestor", "enc"];
-const NOME_PERFIL: Record<string, string> = { rh: "Analista de RH", sst: "Segurança do trabalho", dir: "Diretoria", gestor: "Gestor da obra", enc: "Encarregado de obra" };
+const PERFIS = ["rh", "sst", "dir", "gestor", "enc", "adm"];
+const NOME_PERFIL: Record<string, string> = { rh: "Analista de RH", sst: "Segurança do trabalho", dir: "Diretoria", gestor: "Gestor da obra", enc: "Encarregado de obra", adm: "Administrativo de obra" };
 
 const admin = createClient(URL, SRK, { auth: { persistSession: false, autoRefreshToken: false } });
 
@@ -67,7 +67,7 @@ Deno.serve(async (req) => {
       const email = String(corpo.email || "").trim().toLowerCase();
       const nome = String(corpo.nome || "").trim().slice(0, 120);
       const perfil = String(corpo.perfil || "");
-      const obras = Array.isArray(corpo.obras) ? corpo.obras.map(String).filter((x) => /^[\w-]{1,40}$/.test(x)).slice(0, 50) : [];
+      const obras = ["rh", "dir"].includes(String(corpo.perfil || "")) ? [] : Array.isArray(corpo.obras) ? corpo.obras.map(String).filter((x) => /^[\w-]{1,40}$/.test(x)).slice(0, 50) : [];
       const pessoa_id = corpo.pessoa_id ? String(corpo.pessoa_id).slice(0, 60) : null;
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return erro(400, "email", "Informe um e-mail válido.", origem);
       if (!nome) return erro(400, "nome", "Informe o nome.", origem);
