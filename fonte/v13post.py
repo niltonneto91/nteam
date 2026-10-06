@@ -52,7 +52,7 @@ R("function escopo(){const p=pessoaAtual();return p.perfil==='gestor'||p.perfil=
 R('<title>nTeam · NTN Engenharia</title>','<!doctype html>\n<html lang="pt-BR">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<meta name="robots" content="noindex,nofollow">\n<meta name="referrer" content="strict-origin-when-cross-origin">\n<title>nTeam · NTN Engenharia</title>')
 R('<div class="shell">','</head>\n<body>\n<div class="shell">')
 R('<div id="layer"></div>\n\n<script>','<div id="layer"></div>\n\n<script type="text/plain" id="nteam-app">')
-app13=open(os.path.join(D,'app13.js'),encoding='utf-8').read()
+app13=open(os.path.join(D,'app13.js'),encoding='utf-8').read()+'\n'+open(os.path.join(D,'arquivos15.js'),encoding='utf-8').read()
 R('\nrender();</script>','\n'+app13+'\nrascSalvar=(function(prev){return function(f){if(f&&f.querySelector&&f.querySelector(\'input[type="password"]\'))return;return prev.apply(this,arguments)}})(rascSalvar);\nrender();</script>\n<script src="/vendor/supabase-2.117.2.js"></script>\n<script src="/nuvem.js"></script>\n</body>\n</html>')
 css='''
 .side-foot label[for="perfil"],.side-foot #perfil{display:none!important}
@@ -65,6 +65,19 @@ css='''
 .usuario .u-acoes button{font:inherit;font-size:12px;padding:5px 9px;border-radius:6px;border:1px solid rgba(255,255,255,.25);background:transparent;color:inherit;cursor:pointer;min-height:32px}
 .usuario .u-acoes button:hover{background:rgba(255,255,255,.08)}
 .usuario .u-acoes button:focus-visible{outline:2px solid #ADD91C;outline-offset:1px}
+.arq{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:2px 0}
+.arq + .arq{margin-top:8px}
+.arq-m{flex-basis:100%;font-size:12px;line-height:1.4;overflow-wrap:anywhere}
+.arq-novo{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-top:10px}
+.arq-hist{margin-top:12px;font-size:13px}
+.arq-hist summary{cursor:pointer;font-weight:600}
+.arq-hist ul{margin:8px 0 0;padding-left:18px}
+.arq-hist li{margin:4px 0}
+.pac-cats{border:0;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:6px 18px}
+.pac-cats legend{margin-bottom:6px}
+.pac-falta{font-size:13px;color:var(--crit)}
+.pac-lista{margin:0;padding-left:18px}
+.pac-cod{font-size:26px;font-weight:600;letter-spacing:.3em;max-width:220px}
 '''
 R('</style>',css+'</style>',cnt=None) if s.count('</style>')==1 else None
 if css not in s:
@@ -79,6 +92,8 @@ open(os.path.join(out,'index.html'),'w',encoding='utf-8').write(s)
 shutil.copy(os.path.join(D,'nuvem_loader.js'),os.path.join(out,'nuvem.js'))
 shutil.copy(os.path.join(D,'package','dist','umd','supabase.js'),os.path.join(out,'vendor','supabase-2.117.2.js'))
 shutil.copy(os.path.join(D,'chartpkg','package','dist','chart.umd.js'),os.path.join(out,'vendor','chart-4.4.1.umd.min.js'))
+shutil.copy(os.path.join(D,'jszippkg','package','dist','jszip.min.js'),os.path.join(out,'vendor','jszip-3.10.1.min.js'))
+for f in ['p.html','p.js','p.css']: shutil.copy(os.path.join(D,f),os.path.join(out,f))
 # CSP com hash dos scripts embutidos (sem 'unsafe-inline' para scripts)
 import re,hashlib,base64,json
 h=lambda t:"'sha256-"+base64.b64encode(hashlib.sha256(t.encode('utf-8')).digest()).decode()+"'"

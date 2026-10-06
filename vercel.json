@@ -1,6 +1,4 @@
 {
-  "outputDirectory": "public",
-  "framework": null,
   "cleanUrls": true,
   "headers": [
     {
@@ -8,7 +6,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' 'sha256-zRLBlDNOfuwd55MXEqFvvj2bDDIn5mwMH0X34iRKikM=' 'sha256-cKMbePY3RdMzV+ReqBeUNbJFhWCddPDosV71AyaNj1Q='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://yyylvkofbdhrlaizvoop.supabase.co wss://yyylvkofbdhrlaizvoop.supabase.co; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
+          "value": "default-src 'self'; script-src 'self' 'sha256-zRLBlDNOfuwd55MXEqFvvj2bDDIn5mwMH0X34iRKikM=' 'sha256-KS337uDikhKqzQ4EZftUwBAK+lsvdpspVhhMqkhjd7U='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://yyylvkofbdhrlaizvoop.supabase.co wss://yyylvkofbdhrlaizvoop.supabase.co; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
         },
         {
           "key": "X-Content-Type-Options",
@@ -38,6 +36,19 @@
         {
           "key": "Cache-Control",
           "value": "no-cache"
+        }
+      ]
+    },
+    {
+      "source": "/p",
+      "headers": [
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
         }
       ]
     },

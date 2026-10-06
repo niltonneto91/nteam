@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Documentos compartilhados · NTN Engenharia</title>
+<link rel="stylesheet" href="/p.css">
+</head>
+<body>
+<header class="topo">
+  <div class="marca"><span class="selo" aria-hidden="true">N</span><span>NTN Engenharia</span></div>
+</header>
+<main id="conteudo">
+  <section class="cartao" id="etapa-codigo">
+    <h1>Documentos compartilhados com você</h1>
+    <p>Digite o código de 6 dígitos que você recebeu junto com este link. O código foi enviado separadamente, por mensagem ou telefone.</p>
+    <form id="form-codigo" novalidate>
+      <label for="codigo">Código de acesso</label>
+      <input id="codigo" name="codigo" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>
+      <p class="erro" id="erro" role="alert"></p>
+      <button type="submit" id="entrar">Abrir documentos</button>
+    </form>
+  </section>
+  <section class="cartao oculto" id="etapa-docs" aria-live="polite"></section>
+</main>
+<footer class="rodape">
+  <p>Os documentos contêm dados pessoais e são compartilhados só para a finalidade da sua solicitação (LGPD). Não repasse o link nem o código. Cada acesso fica registrado.</p>
+</footer>
+<script src="/p.js"></script>
+</body>
+</html>
