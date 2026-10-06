@@ -102,8 +102,14 @@ function telaNovaSenha(){
     if(f.s1.value!==f.s2.value){m.textContent='As duas senhas não são iguais.';return}
     b.disabled=true;b.textContent='Salvando…';
     const {error}=await sb.auth.updateUser({password:f.s1.value});
-    if(error){b.disabled=false;b.textContent='Salvar senha e entrar';m.textContent=/same|different/i.test(error.message)?'Use uma senha diferente da temporária.':/weak|short/i.test(error.message)?'Senha fraca. Use mais caracteres, misturando letras e números.':'Não foi possível salvar a senha. Tente de novo.';return}
-    const {error:e2}=await sb.rpc('senha_trocada');if(e2){b.disabled=false;b.textContent='Salvar senha e entrar';m.textContent=/senha_nao_trocada/.test(e2.message)?'Use uma senha diferente da temporária.':'Não foi possível concluir. Tente de novo.';return}iniciar()});
+    const mesma=error&&/same|different/i.test(error.message);
+    if(error&&!mesma){b.disabled=false;b.textContent='Salvar senha e entrar';m.textContent=/weak|short/i.test(error.message)?'Senha fraca. Use mais caracteres, misturando letras e números.':'Não foi possível salvar a senha. Tente de novo.';return}
+    /* mesmo se a senha já tinha sido gravada numa tentativa anterior, conclui a liberação */
+    const {error:e2}=await sb.rpc('senha_trocada');
+    if(e2){b.disabled=false;b.textContent='Salvar senha e entrar';
+      m.textContent=/senha_nao_trocada/.test(e2.message)?'Use uma senha diferente da temporária.':'A senha foi salva, mas não foi possível liberar o acesso. Tente de novo; se continuar, avise o RH.';
+      console.error(JSON.stringify({nivel:'erro',etapa:'senha_trocada',msg:e2.message}));return}
+    iniciar()});
 }
 
 function telaErro(titulo,texto,sair=true){
