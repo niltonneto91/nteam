@@ -6,8 +6,9 @@ import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 
 const URL = Deno.env.get("SUPABASE_URL")!;
 const SRK = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-// Origens do app: domínios da Vercel do projeto nteam.
-const ORIGEM_OK = (o: string | null) => !!o && (/^https:\/\/nteam[a-z0-9-]*\.vercel\.app$/.test(o));
+// Origem do app publicado.
+const ORIGENS = new Set(["https://nteam.vercel.app"]);
+const ORIGEM_OK = (o: string | null) => !!o && ORIGENS.has(o);
 const PERFIS = ["rh", "sst", "dir", "gestor", "enc"];
 const NOME_PERFIL: Record<string, string> = { rh: "Analista de RH", sst: "Segurança do trabalho", dir: "Diretoria", gestor: "Gestor da obra", enc: "Encarregado de obra" };
 
@@ -53,8 +54,8 @@ Deno.serve(async (req) => {
   const token = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
   const { data: u, error: eu } = await admin.auth.getUser(token);
   if (eu || !u?.user) return erro(401, "sessao", "Sessão expirada. Entre novamente.", origem);
-  const { data: eu2 } = await admin.from("perfis").select("user_id,nome,perfil,ativo").eq("user_id", u.user.id).maybeSingle();
-  if (!eu2 || !eu2.ativo || !["rh", "dir"].includes(eu2.perfil)) return erro(403, "sem_permissao", "Só RH e Diretoria gerenciam acessos.", origem);
+  const { data: eu2 } = await admin.from("perfis").select("user_id,nome,perfil,ativo,trocar_senha").eq("user_id", u.user.id).maybeSingle();
+  if (!eu2 || !eu2.ativo || eu2.trocar_senha || !["rh", "dir"].includes(eu2.perfil)) return erro(403, "sem_permissao", "Só RH e Diretoria gerenciam acessos.", origem);
   const autor = { id: eu2.user_id, nome: eu2.nome, perfil: eu2.perfil };
 
   let corpo: Record<string, unknown>;
