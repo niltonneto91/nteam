@@ -52,7 +52,7 @@ R("function escopo(){const p=pessoaAtual();return p.perfil==='gestor'||p.perfil=
 R('<title>nTeam · NTN Engenharia</title>','<!doctype html>\n<html lang="pt-BR">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<meta name="robots" content="noindex,nofollow">\n<meta name="referrer" content="strict-origin-when-cross-origin">\n<title>nTeam · NTN Engenharia</title>')
 R('<div class="shell">','</head>\n<body>\n<div class="shell">')
 R('<div id="layer"></div>\n\n<script>','<div id="layer"></div>\n\n<script type="text/plain" id="nteam-app">')
-app13=open(os.path.join(D,'app13.js'),encoding='utf-8').read()+'\n'+open(os.path.join(D,'arquivos15.js'),encoding='utf-8').read()
+app13=open(os.path.join(D,'app13.js'),encoding='utf-8').read()+'\n'+open(os.path.join(D,'arquivos15.js'),encoding='utf-8').read()+'\n'+open(os.path.join(D,'foto16.js'),encoding='utf-8').read()
 R('\nrender();</script>','\n'+app13+'\nrascSalvar=(function(prev){return function(f){if(f&&f.querySelector&&f.querySelector(\'input[type="password"]\'))return;return prev.apply(this,arguments)}})(rascSalvar);\nrender();</script>\n<script src="/vendor/supabase-2.117.2.js"></script>\n<script src="/nuvem.js"></script>\n</body>\n</html>')
 css='''
 .side-foot label[for="perfil"],.side-foot #perfil{display:none!important}
@@ -78,6 +78,27 @@ css='''
 .pac-falta{font-size:13px;color:var(--crit)}
 .pac-lista{margin:0;padding-left:18px}
 .pac-cod{font-size:26px;font-weight:600;letter-spacing:.3em;max-width:220px}
+.foto-campo{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
+body.foto-aberta{overflow:hidden}
+.foto-ov{position:fixed;inset:0;z-index:2000;background:rgba(21,23,15,.72);display:flex;align-items:flex-end;justify-content:center}
+.foto-box{background:var(--bg,#ECECE3);color:var(--ink,#1C1E17);width:100%;max-width:560px;max-height:100%;overflow:auto;border-radius:16px 16px 0 0;padding:14px 16px calc(16px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:10px}
+@media (min-width:600px){.foto-ov{align-items:center}.foto-box{border-radius:16px}}
+.foto-box header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.foto-box h2{font-size:17px;margin:0}
+.foto-prev{background:#fff;border:1px solid rgba(0,0,0,.12);border-radius:10px;display:flex;justify-content:center;align-items:center;min-height:180px}
+.foto-prev img{max-width:100%;max-height:52vh;display:block}
+.foto-pags{display:flex;gap:8px;overflow-x:auto}
+.foto-pags:empty{display:none}
+.foto-pag{position:relative;flex:0 0 auto}
+.foto-pag>button:first-child{border:2px solid transparent;border-radius:8px;padding:0;background:#fff;position:relative;min-height:44px}
+.foto-pag.sel>button:first-child{border-color:var(--accent,#4C6A0A)}
+.foto-pag img{height:64px;display:block;border-radius:6px}
+.foto-pag span{position:absolute;left:4px;bottom:2px;font-size:12px;font-weight:700;background:rgba(255,255,255,.85);border-radius:4px;padding:0 4px}
+.foto-rm{position:absolute;top:-8px;right:-8px;width:28px;height:28px;border-radius:50%;border:0;background:var(--crit,#BF3A22);color:#fff;font-size:16px;line-height:1}
+.foto-dica{margin:0;font-size:13px;opacity:.85}
+.foto-acoes{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.foto-acoes .btn{justify-content:center;min-height:44px}
+.foto-acoes .primary{grid-column:1/-1}
 '''
 R('</style>',css+'</style>',cnt=None) if s.count('</style>')==1 else None
 if css not in s:
