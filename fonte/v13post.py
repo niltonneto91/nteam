@@ -48,11 +48,21 @@ R('<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.
 R("gestor:{nome:'Gestor da obra',curto:'Gestor'},enc:{nome:'Encarregado de obra',curto:'Encarregado'}};","gestor:{nome:'Gestor da obra',curto:'Gestor'},enc:{nome:'Encarregado de obra',curto:'Encarregado'},adm:{nome:'Administrativo de obra',curto:'Adm. obra'}};")
 R("function escopo(){const p=pessoaAtual();return p.perfil==='gestor'||p.perfil==='enc'?(p.obras||[]):null}","function escopo(){const p=pessoaAtual();return ['rh','dir'].includes(p.perfil)?null:(p.obras||[])}")
 
+# 4d. v17 · alertas de EPI (filtro, responsável SST e atalho para a aba SST); férias abrem a aba Obras e ausências
+R("const tipos=['ASO','Treinamento','Experiência','Férias','Folga de campo','Retorno','Mobilização','Requisição','Hospedagem','Documento da obra'];const all=alertas();","const tipos=['ASO','Treinamento','EPI','Experiência','Férias','Folga de campo','Retorno','Mobilização','Requisição','Hospedagem','Documento da obra'];const all=alertas();")
+R("a.tipo==='ASO'||a.tipo==='Treinamento'?'sst':a.tipo==='Retorno'||a.tipo==='Folga de campo'?'obras':'resumo'","a.tipo==='ASO'||a.tipo==='Treinamento'||a.tipo==='EPI'?'sst':a.tipo==='Retorno'||a.tipo==='Folga de campo'||a.tipo==='Férias'?'obras':'resumo'")
+R("['ASO','Treinamento'].includes(a.tipo)?sstResp():respObra(a.c.obraId)","['ASO','Treinamento','EPI'].includes(a.tipo)?sstResp():respObra(a.c.obraId)")
+R("const r=l.filter(a=>a.d<=90).sort((a,b)=>a.d-b.d);CACHE.set(ck,r);return r;","const r=l.filter(a=>a.d<=90||a.semJanela).sort((a,b)=>a.d-b.d);CACHE.set(ck,r);return r;")
+R("  return l.filter(a=>a.d<=90).sort((a,b)=>a.d-b.d)};","  return l.filter(a=>a.d<=90||a.semJanela).sort((a,b)=>a.d-b.d)};",cnt=2)
+R("['61 a 90 dias',a=>!a.vencido&&a.d>60]","['61 dias ou mais',a=>!a.vencido&&a.d>60]")
+R("refTxt(hoje,'itens até 90 dias; o selo do menu conta só vencidos e ações pendentes')","refTxt(hoje,'itens até 90 dias (férias a programar aparecem desde o fim do período aquisitivo); o selo do menu conta só vencidos e ações pendentes')")
+R("['ASO','Treinamento','Experiência','Férias','Folga de campo','Retorno']","['ASO','Treinamento','EPI','Experiência','Férias','Folga de campo','Retorno']",cnt=2)
+
 # 5. documento completo, app só roda depois do login
 R('<title>nTeam · NTN Engenharia</title>','<!doctype html>\n<html lang="pt-BR">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<meta name="robots" content="noindex,nofollow">\n<meta name="referrer" content="strict-origin-when-cross-origin">\n<title>nTeam · NTN Engenharia</title>')
 R('<div class="shell">','</head>\n<body>\n<div class="shell">')
 R('<div id="layer"></div>\n\n<script>','<div id="layer"></div>\n\n<script type="text/plain" id="nteam-app">')
-app13=open(os.path.join(D,'app13.js'),encoding='utf-8').read()+'\n'+open(os.path.join(D,'arquivos15.js'),encoding='utf-8').read()+'\n'+open(os.path.join(D,'foto16.js'),encoding='utf-8').read()
+app13=open(os.path.join(D,'app13.js'),encoding='utf-8').read()+'\n'+open(os.path.join(D,'arquivos15.js'),encoding='utf-8').read()+'\n'+open(os.path.join(D,'foto16.js'),encoding='utf-8').read()+'\n'+open(os.path.join(D,'epi17.js'),encoding='utf-8').read()+('' if os.environ.get('SEM_FERIAS') else '\n'+open(os.path.join(D,'ferias17.js'),encoding='utf-8').read())
 R('\nrender();</script>','\n'+app13+'\nrascSalvar=(function(prev){return function(f){if(f&&f.querySelector&&f.querySelector(\'input[type="password"]\'))return;return prev.apply(this,arguments)}})(rascSalvar);\nrender();</script>\n<script src="/vendor/supabase-2.117.2.js"></script>\n<script src="/nuvem.js"></script>\n</body>\n</html>')
 css='''
 .side-foot label[for="perfil"],.side-foot #perfil{display:none!important}
