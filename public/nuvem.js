@@ -11,10 +11,10 @@ const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 /* ---------- montagem: junta os registros que o perfil pode ler (v14, por obra) ---------- */
-const COL_TIPO={colab:'colabs',req:'reqs',cand:'cands',hist:'hist',mob:'mobs',hosp:'hospedagens',estadia:'estadias',plano:'planos',tarefa:'tarefas',docobra:'docsObra',aval:'avaliacoes',lote:'lotesImport'};
+const COL_TIPO={colab:'colabs',req:'reqs',cand:'cands',hist:'hist',mob:'mobs',hosp:'hospedagens',estadia:'estadias',plano:'planos',tarefa:'tarefas',docobra:'docsObra',aval:'avaliacoes',lote:'lotesImport',proposta:'propostas'};
 NUVEM.montar=function(rows){
   const g=rows.find(r=>r.tipo==='global');if(!g)throw new Error('base_ausente');
-  const DB={v:4,...JSON.parse(JSON.stringify(g.dados)),colabs:[],tarefas:[],hist:[],mobs:[],hospedagens:[],estadias:[],planos:[],reqs:[],cands:[],avaliacoes:[],lotesImport:[],docsObra:[],avalRasc:{},pontoDia:[]};
+  const DB={v:4,...JSON.parse(JSON.stringify(g.dados)),colabs:[],tarefas:[],hist:[],mobs:[],hospedagens:[],estadias:[],planos:[],reqs:[],cands:[],avaliacoes:[],lotesImport:[],docsObra:[],propostas:[],avalRasc:{},pontoDia:[]};
   DB.mobLog=DB.mobLog||[];DB.limpezas=DB.limpezas||{};DB.migracaoV4=DB.migracaoV4||{};
   const por={};for(const r of rows)(por[r.tipo]??=[]).push(r);
   for(const [tp,col] of Object.entries(COL_TIPO))for(const r of por[tp]||[])DB[col].push(JSON.parse(JSON.stringify(r.dados)));
@@ -26,6 +26,8 @@ NUVEM.montar=function(rows){
       if(s.versoes)a.versoes=s.versoes;if(s.motivoCanc!=null&&a.cancelado)a.cancelado.motivo=s.motivoCanc}
     for(const h of c.historico||[])if(h.hid&&sH[h.hid]!=null)h.texto=sH[h.hid]}
   for(const r of por.avalrasc||[])DB.avalRasc[r.id]=r.dados;
+  /* v18: tabela de custos de viagem e salários (só chega para RH, Diretoria e Adm. de obra) */
+  if(por.custos&&por.custos[0])DB.custos=JSON.parse(JSON.stringify(por.custos[0].dados));
   for(const r of (por.ponto||[]).sort((a,b)=>a.id.localeCompare(b.id)))for(const x of r.dados||[])DB.pontoDia.push(x);
   return DB;
 };

@@ -62,7 +62,7 @@ R("['ASO','Treinamento','Experiência','Férias','Folga de campo','Retorno']","[
 R('<title>nTeam · NTN Engenharia</title>','<!doctype html>\n<html lang="pt-BR">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<meta name="robots" content="noindex,nofollow">\n<meta name="referrer" content="strict-origin-when-cross-origin">\n<title>nTeam · NTN Engenharia</title>')
 R('<div class="shell">','</head>\n<body>\n<div class="shell">')
 R('<div id="layer"></div>\n\n<script>','<div id="layer"></div>\n\n<script type="text/plain" id="nteam-app">')
-app13=open(os.path.join(D,'app13.js'),encoding='utf-8').read()+'\n'+open(os.path.join(D,'arquivos15.js'),encoding='utf-8').read()+'\n'+open(os.path.join(D,'foto16.js'),encoding='utf-8').read()+'\n'+open(os.path.join(D,'epi17.js'),encoding='utf-8').read()+('' if os.environ.get('SEM_FERIAS') else '\n'+open(os.path.join(D,'ferias17.js'),encoding='utf-8').read())
+app13=open(os.path.join(D,'app13.js'),encoding='utf-8').read()+'\n'+open(os.path.join(D,'arquivos15.js'),encoding='utf-8').read()+'\n'+open(os.path.join(D,'foto16.js'),encoding='utf-8').read()+'\n'+open(os.path.join(D,'epi17.js'),encoding='utf-8').read()+('' if os.environ.get('SEM_FERIAS') else '\n'+open(os.path.join(D,'ferias17.js'),encoding='utf-8').read())+'\n'+open(os.path.join(D,'viagem18.js'),encoding='utf-8').read()+'\n'+open(os.path.join(D,'proposta18.js'),encoding='utf-8').read()
 R('\nrender();</script>','\n'+app13+'\nrascSalvar=(function(prev){return function(f){if(f&&f.querySelector&&f.querySelector(\'input[type="password"]\'))return;return prev.apply(this,arguments)}})(rascSalvar);\nrender();</script>\n<script src="/vendor/supabase-2.117.2.js"></script>\n<script src="/nuvem.js"></script>\n</body>\n</html>')
 css='''
 .side-foot label[for="perfil"],.side-foot #perfil{display:none!important}
@@ -125,6 +125,7 @@ shutil.copy(os.path.join(D,'package','dist','umd','supabase.js'),os.path.join(ou
 shutil.copy(os.path.join(D,'chartpkg','package','dist','chart.umd.js'),os.path.join(out,'vendor','chart-4.4.1.umd.min.js'))
 shutil.copy(os.path.join(D,'jszippkg','package','dist','jszip.min.js'),os.path.join(out,'vendor','jszip-3.10.1.min.js'))
 for f in ['p.html','p.js','p.css']: shutil.copy(os.path.join(D,f),os.path.join(out,f))
+shutil.copy(os.path.join(D,'municipios-ibge.json'),os.path.join(out,'vendor','municipios-ibge.json'))
 # CSP com hash dos scripts embutidos (sem 'unsafe-inline' para scripts)
 import re,hashlib,base64,json
 h=lambda t:"'sha256-"+base64.b64encode(hashlib.sha256(t.encode('utf-8')).digest()).decode()+"'"

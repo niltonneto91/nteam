@@ -7744,6 +7744,604 @@ RELS.ferias={nome:'Férias',cols:['Nome','Obra','Função','Períodos completos 
     const venc=d.pers.some(p=>/Vencido/.test(p.sit));
     return [c.nome,nomeObra(c.obraId),F(c.funcaoId)?.nome||'',d.acumulados,ab.reduce((t,p)=>t+p.saldo,0),ab[0]?fmt(ab[0].conc):'—',prox?`${fmt(prox.inicio)} a ${fmt(prox.fim)}`:'—',venc?'Vencido: pagar em dobro':d.acumulados>1?'2 ou mais períodos acumulados':d.acumulados?'A programar':'Em dia']})};
 
+
+/* =====================================================================
+   v18 · CIDADES, FOLGA DE CAMPO E AJUDA DE CUSTO
+   - Cidade de origem e cidade natal do colaborador (registro pessoal: RH, Diretoria e Adm. de obra).
+   - Cidade da obra escolhida na lista de municípios do IBGE (arquivo local, sem serviço externo).
+   - Distância = linha reta × fator de correção (padrão 1,30), faixas de km e valor por trecho.
+   - Folga de campo padrão para alojados: indireta a cada 60 dias, direta a cada 90 dias, 5 dias úteis,
+     sempre contada da primeira chegada em obra pela empresa. Sugestão na segunda-feira seguinte;
+     RH e Adm. de obra confirmam ou ajustam. Feriado não prorroga. Viagem dentro do período.
+   - Férias que começam até 30 dias antes ou depois de uma folga substituem essa folga.
+   - Ajuda de custo: 1 trecho na ida, 2 por folga, 1 na volta (não paga em pedido de demissão ou justa causa).
+   Valores e tabela ficam no registro 'custos' (servidor: só RH, Diretoria e Adm. de obra leem; só RH e Diretoria gravam).
+   ===================================================================== */
+/* datas vindas de registros que outros perfis gravam: sempre escapadas */
+const fmtE=s=>esc(fmt(s)),fmtCE=s=>esc(fmtC(s)),fmtDSE=s=>esc(fmtDS(s));
+PERM_DEF.push(
+  ['verCustoViagem','Ver cidades de origem e natal, ajuda de custo, tabela de passagens e salários por função','Visualizar',['rh','dir','adm']],
+  ['editarCustoViagem','Alterar tabela de passagens, fator de distância e salários por função','Editar',['rh','dir']],
+  ['confirmarFolga','Confirmar e ajustar folgas de campo e registrar ajuda de custo paga','Editar',['rh','adm']]);
+const V18_PERM={verCustoViagem:['rh','dir','adm'],editarCustoViagem:['rh','dir'],confirmarFolga:['rh','adm'],fazerProposta:['rh']};
+const podeV17=pode;
+pode=function(k){if(V18_PERM[k]&&!DB?.cfg?.perms?.[k])return V18_PERM[k].includes(UI.perfil);return podeV17(k)};
+/* o servidor só entrega o registro 'custos' e o pessoal a estes perfis */
+const PERFIS_CUSTO=['rh','dir','adm'];
+const podeVerCusto=()=>pode('verCustoViagem')&&PERFIS_CUSTO.includes(UI.perfil);
+const podeEditarCusto=()=>pode('editarCustoViagem')&&['rh','dir'].includes(UI.perfil);
+
+/* ---------- registro restrito 'custos' e campos pessoais novos ---------- */
+const CUSTO_PAD={v:1,fator:1.3,faixas:[{ate:300,valor:120},{ate:700,valor:230},{ate:1200,valor:380},{ate:null,valor:900}],salarios:{}};
+function custos(){return DB.custos||CUSTO_PAD}
+function custosMaterializar(){if(!DB.custos)DB.custos=JSON.parse(JSON.stringify(CUSTO_PAD));DB.custos.salarios??={};DB.custos.faixas.sort((a,b)=>(a.ate==null?1e9:+a.ate)-(b.ate==null?1e9:+b.ate));return DB.custos}
+['cidades','ajudas'].forEach(k=>{if(!PESSOAL_CAMPOS.includes(k))PESSOAL_CAMPOS.push(k);if(!PESSOAL_SO.includes(k))PESSOAL_SO.push(k)});
+const dividirNuvemV17=dividirNuvem;
+dividirNuvem=function(){const out=dividirNuvemV17();if(DB.custos&&typeof DB.custos==='object')out.set('custos|principal',{tipo:'custos',id:'principal',obras:[],dados:DB.custos});
+  else if(NUVEM.reg.has('custos|principal')){try{const t=JSON.parse(NUVEM.reg.get('custos|principal').t);out.set('custos|principal',{tipo:'custos',id:'principal',obras:t.o||[],dados:t.d})}catch(e){}}return out};
+const podeGravarTipoV17=podeGravarTipo;
+podeGravarTipo=function(tp){if(tp==='custos'||tp==='proposta')return ['rh','dir'].includes(meuPerfil());return podeGravarTipoV17(tp)};
+/* trilha: cidades são dado pessoal; valores de viagem, tabela e salários são financeiros */
+const classeV17=classe;
+classe=function(path){if(/(^|\.)(cidades|natal|cidOrigem)(\.|\[|$)/.test(path))return 'pessoal';if(/(^|\.)(origem|natal)(\.|\[|$)/.test(path))return 'pessoal';if(/(^|\.)(ajudas|ajuda|faixas|fator|salarios|valorTrecho|custoMensal|salarioBase|encargos|adicValor|adic|ajudaForma|salario)(\.|\[|$)/.test(path)||/^custos(\.|\[|$)/.test(path))return 'financeiro';return classeV17(path)};
+Object.assign(NOME_COL,{custos:'Tabela de custos de viagem e salários',propostas:'Proposta de emprego'});
+
+/* ---------- municípios ---------- */
+const MUN={lista:null,prom:null,erro:''};
+const munNorm=s=>String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+const munTxt=m=>m&&m.nome?`${m.nome} / ${m.uf}`:'';
+const munRef=m=>m?{cod:m.cod,nome:m.nome,uf:m.uf,lat:m.lat,lon:m.lon}:null;
+const munOk=m=>!!(m&&m.cod&&m.nome&&isFinite(+m.lat)&&isFinite(+m.lon));
+function munCarregar(){
+  if(MUN.lista)return Promise.resolve(MUN.lista);
+  return MUN.prom??=fetch('/vendor/municipios-ibge.json',{credentials:'same-origin'}).then(r=>{if(!r.ok)throw new Error('http '+r.status);return r.json()}).then(l=>{
+    if(!Array.isArray(l)||l.length<5000)throw new Error('lista inválida');
+    MUN.lista=l.filter(x=>Array.isArray(x)&&x.length===5).map(([cod,nome,uf,lat,lon])=>({cod:+cod,nome:String(nome),uf:String(uf),lat:+lat,lon:+lon,k:munNorm(nome)+' '+munNorm(uf)}));
+    let dl=document.getElementById('mun-dl');if(!dl){dl=document.createElement('datalist');dl.id='mun-dl';document.body.appendChild(dl)}
+    dl.replaceChildren(...MUN.lista.map(m=>{const o=document.createElement('option');o.value=munTxt(m);return o}));
+    MUN.erro='';return MUN.lista}).catch(e=>{MUN.prom=null;MUN.erro='Não foi possível carregar a lista de municípios. Atualize a página e tente de novo.';throw e});
+}
+/* "Senador Canedo / GO", "Senador Canedo/GO", "senador canedo - go" */
+function munAchar(txt){if(!MUN.lista)return null;const s=String(txt||'').trim();if(!s)return null;
+  const m=s.match(/^(.*?)[\s]*[\/\-–,][\s]*([A-Za-z]{2})$/);const nome=munNorm(m?m[1]:s),uf=m?m[2].toUpperCase():'';
+  const l=MUN.lista.filter(x=>munNorm(x.nome)===nome&&(!uf||x.uf===uf));return l.length===1?l[0]:null}
+function munCampo(id,ref,attrs=''){return `<input class="inp" id="${id}" list="mun-dl" autocomplete="off" value="${esc(munTxt(ref))}" placeholder="Digite e escolha: cidade / UF" ${attrs}>`}
+
+/* ---------- distância e faixas ---------- */
+function kmReta(a,b){const R=6371,r=x=>x*Math.PI/180;const dLa=r(b.lat-a.lat),dLo=r(b.lon-a.lon);const h=Math.sin(dLa/2)**2+Math.cos(r(a.lat))*Math.cos(r(b.lat))*Math.sin(dLo/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(h)))}
+function faixasOrd(){return (custos().faixas||[]).slice().sort((a,b)=>(a.ate==null?1e9:+a.ate)-(b.ate==null?1e9:+b.ate))}
+function faixaRot(i){const f=faixasOrd();const x=f[i];if(!x)return '';const ant=i?f[i-1].ate:0;return x.ate==null?`acima de ${(+ant).toLocaleString('pt-BR')} km`:i===0?`até ${(+x.ate).toLocaleString('pt-BR')} km`:`${(+ant).toLocaleString('pt-BR')} a ${(+x.ate).toLocaleString('pt-BR')} km`}
+function viagem(orig,dest){if(!munOk(orig)||!munOk(dest))return null;const reta=kmReta(orig,dest);const fator=+custos().fator||1.3;const km=Math.round(reta*fator);
+  const f=faixasOrd();let i=f.findIndex(x=>x.ate==null||km<=+x.ate);if(i<0)i=f.length-1;const fx=f[i]||{valor:0};
+  return {reta:Math.round(reta),fator,km,faixa:faixaRot(i),valorTrecho:+fx.valor||0,mesma:orig.cod===dest.cod}}
+/* cidade, jornada e regras de cada obra ficam no registro restrito (só RH e Diretoria gravam) */
+const obraCfg=o=>(custos().obras||{})[o]||{};
+function obraCfgMat(o){const g=custosMaterializar();g.obras??={};return g.obras[o]??={}}
+const obraMun=o=>{const m=obraCfg(o).mun;return munOk(m)?m:null};
+const origemDe=c=>munOk(c?.cidades?.origem)?c.cidades.origem:null;
+function viagemColab(c){return viagem(origemDe(c),obraMun(c.obraId))}
+
+/* ---------- folga de campo padrão ---------- */
+const GRUPO_PAD={tst:'indireta',eng:'indireta',adm:'indireta',sup:'indireta'};
+const grupoFuncao=fid=>F(fid)?.grupo||GRUPO_PAD[fid]||'direta';
+function folgaPad(){const p=DB.cfg.folgaPadrao||{};const g=(k,c)=>({ciclo:Math.max(7,Math.round(+p[k]?.ciclo)||c),dias:Math.min(10,Math.max(1,Math.round(+p[k]?.dias)||5))});return {direta:g('direta',90),indireta:g('indireta',60)}}
+const dow=d=>parse(d).getDay();
+const proxSeg=d=>{const w=dow(d);return w===1?d:addD(d,(8-w)%7)};
+function uteisFim(seg,n){let d=seg,k=1;while(k<n){d=addD(d,1);const w=dow(d);if(w!==0&&w!==6)k++}return d}
+function primeiraChegada(c){const l=(c.alocacoes||[]).filter(a=>a.status!=='proposta'&&(a.chegada||a.inicio)).map(a=>a.chegada&&a.chegada>a.inicio?a.chegada:a.inicio).sort();return l[0]||c.admissao||''}
+function folgaModo(c){if(c.regime!=='Alojado')return 'nenhum';const v=c.folgaV2;if(v&&v.modo)return v.modo;return c.folga?.proxima&&+c.folga?.campo>0?'anterior':'padrao'}
+function folgaRegra(c){const m=folgaModo(c);if(m==='excecao'){const v=c.folgaV2;return {ciclo:Math.max(7,+v.ciclo||0),dias:Math.min(10,Math.max(1,+v.dias||5)),exc:true}}return {...folgaPad()[grupoFuncao(c.funcaoId)],exc:false}}
+const folgaAncora=c=>c.folgaV2?.ancora||primeiraChegada(c);
+/* lista de folgas do ciclo: n = 1, 2, 3… contadas da âncora */
+function folgasCiclo(c,ate){const m=folgaModo(c);if(m!=='padrao'&&m!=='excecao')return null;
+  const an=folgaAncora(c);if(!an||c.status==='Admissão')return [];const {ciclo,dias:nd}=folgaRegra(c);if(!(ciclo>0))return [];
+  const v=c.folgaV2||{};const conf=v.conf||{},pul=v.puladas||{};const fimV=c.desligamento?.data||'';
+  const fer=(c.ausencias||[]).filter(a=>a.tipo==='Férias'&&a.inicio);const out=[];
+  for(let n=1;n<400;n++){const ref=addD(an,n*ciclo);const seg=conf[n]?.seg||proxSeg(ref);const sai=addD(seg,-2);if(sai>ate)break;
+    const sex=uteisFim(seg,nd);const volta=proxSeg(addD(sex,1));const fim=addD(volta,-1);if(fimV&&sai>=fimV)break;
+    const reg=(c.ausencias||[]).find(a=>a.tipo==='Folga de campo'&&+a.folgaN===n);
+    const f=fer.find(a=>Math.abs((parse(a.inicio)-parse(seg))/864e5)<=30||(a.inicio<=fim&&(a.fim||'9999')>=sai));
+    const est=reg?'confirmada':pul[n]?'pulada':f?'ferias':conf[n]?'confirmada':'sugerida';
+    out.push({n,ref,seg,sex,sai,volta,inicio:reg?.inicio||sai,fim:reg?.fim||fim,est,reg,ferias:f,pulada:pul[n],conf:conf[n],passou:fim<hoje})}
+  return out}
+const folgasProjV17=folgasProj;
+folgasProj=function(c,ate){const l=folgasCiclo(c,ate);if(!l)return folgasProjV17(c,ate);
+  return l.filter(x=>x.est==='sugerida'&&x.fim>=hoje).map(x=>({tipo:'Folga de campo',inicio:x.sai,fim:x.fim,confirmado:false,proj:true,folgaN:x.n,seg:x.seg,sex:x.sex}))};
+
+/* ---------- ajuda de custo ---------- */
+const NAO_PAGA_VOLTA=['Pedido de demissão','Justa causa'];
+const AJ_PAR={Folga:['Folga','Férias'],'Férias':['Folga','Férias']};
+function ajudaPaga(c,tipo,n){const ts=AJ_PAR[tipo]||[tipo];return (c.ajudas||[]).find(a=>ts.includes(a.tipo)&&(n==null||n===''||String(a.ref)===String(n)))}
+/* trechos devidos: ida (1), cada folga (2), férias que substituíram folga (2), volta (1) */
+function ajudasDevidas(c,ate){if(c.regime!=='Alojado')return [];const v=viagemColab(c);const out=[];const t=v?v.valorTrecho:null;
+  const ch=primeiraChegada(c);if(ch)out.push({tipo:'Ida',ref:'',data:ch,trechos:1,valor:t,paga:ajudaPaga(c,'Ida')});
+  for(const f of folgasCiclo(c,ate||addD(hoje,400))||[]){if(f.est==='pulada')continue;
+    if(f.est==='ferias'){if(f.ferias)out.push({tipo:'Férias',ref:f.n,data:f.ferias.inicio,trechos:2,valor:t==null?null:2*t,paga:ajudaPaga(c,'Férias',f.n),obs:`no lugar da folga ${f.n}`});continue}
+    out.push({tipo:'Folga',ref:f.n,data:f.sai,trechos:2,valor:t==null?null:2*t,paga:ajudaPaga(c,'Folga',f.n),est:f.est})}
+  if(c.desligamento){const naoDevida=NAO_PAGA_VOLTA.includes(c.desligamento.tipo);out.push({tipo:'Volta',ref:'',data:c.desligamento.data,trechos:naoDevida?0:1,valor:naoDevida?0:t,paga:ajudaPaga(c,'Volta'),naoDevida})}
+  return out}
+
+/* ---------- ficha › Obras e ausências: folga de campo e viagens ---------- */
+const EST_ROT={sugerida:['Sugerida','warn'],confirmada:['Confirmada','good'],pulada:['Não haverá','plain'],ferias:['Substituída por férias','info']};
+function folgaPainel(c){if(c.regime!=='Alojado'||c.status==='Admissão')return '';
+  const m=folgaModo(c);const edF=pode('confirmarFolga')&&noEscopoC(c);const edC=pode('editarCadastro');const vc=podeVerCusto();
+  const id=esc(c.id);
+  let corpo='';
+  if(m==='anterior'){
+    corpo=`<div class="panel-b"><div class="banner" style="margin:0">Este colaborador ainda segue a escala anterior (${esc(c.folga.campo)} dias em campo × ${esc(c.folga.folga)} de folga, próxima em ${fmtE(c.folga.proxima)}). A folga padrão da NTN (${grupoFuncao(c.funcaoId)==='indireta'?'mão de obra indireta: a cada '+folgaPad().indireta.ciclo:'mão de obra direta: a cada '+folgaPad().direta.ciclo} dias, ${folgaPad()[grupoFuncao(c.funcaoId)].dias} dias úteis, contados da primeira chegada em ${fmtE(primeiraChegada(c))}) só passa a valer quando o RH aplicar. ${edC?`<button class="btn small" data-act="folgaAplicar" data-id="${id}">Aplicar a folga padrão</button>`:''}</div></div>`;
+  }else{
+    const r=folgaRegra(c);const an=folgaAncora(c);const l=folgasCiclo(c,addD(hoje,400))||[];
+    const prox=l.filter(x=>!x.passou).slice(0,4);const ant=l.filter(x=>x.passou).slice(-3).reverse();
+    const lin=x=>{const [rot,cl]=EST_ROT[x.est];const ini=x.reg?x.reg.inicio:x.sai,fi=x.reg?x.reg.fim:x.fim;
+      const acoes=[];if(edF&&!x.passou&&x.est==='sugerida')acoes.push(`<button class="btn small primary" data-act="folgaConf" data-id="${id}" data-n="${x.n}">Confirmar</button>`,`<button class="btn small ghost" data-act="folgaPular" data-id="${id}" data-n="${x.n}">Não haverá</button>`);
+      if(edF&&!x.passou&&x.est==='confirmada'&&x.reg&&x.reg.inicio>hoje)acoes.push(`<button class="btn small ghost" data-act="folgaConf" data-id="${id}" data-n="${x.n}">Mudar data</button>`,`<button class="btn small ghost danger" data-act="folgaDesfazer" data-id="${id}" data-n="${x.n}">Desfazer</button>`);
+      if(edF&&x.est==='pulada')acoes.push(`<button class="btn small ghost" data-act="folgaVoltar" data-id="${id}" data-n="${x.n}">Voltar a prever</button>`);
+      const det=x.est==='ferias'?`férias a partir de ${fmtE(x.ferias.inicio)}`:x.est==='pulada'?esc(x.pulada.motivo||''):x.est==='sugerida'&&x.seg!==x.ref?`${n90(x)} dias completam em ${fmtDSE(x.ref)}`:'';
+      return `<tr><td class="num">${x.n}ª</td><td class="num">${x.est==='ferias'||x.est==='pulada'?fmtE(x.seg):`<b>${fmtCE(x.seg)} a ${fmtCE(x.sex)}</b>`}</td><td class="num">${x.est==='ferias'||x.est==='pulada'?'—':`${fmtDSE(ini)} · volta ${fmtDSE(addD(fi,1))}`}</td><td>${pillS(rot,cl)}${det?`<div class="muted" style="font-size:12px">${det}</div>`:''}</td><td><div class="actions" style="gap:6px;flex-wrap:wrap">${acoes.join('')}</div></td></tr>`};
+    const n90=x=>Math.round((parse(x.ref)-parse(an))/864e5);
+    corpo=`<div class="panel-b facts"><div><span>Regra</span><b>${r.exc?`Exceção: a cada ${r.ciclo} dias, ${r.dias} dias úteis`:`${grupoFuncao(c.funcaoId)==='indireta'?'Mão de obra indireta':'Mão de obra direta'}: a cada ${r.ciclo} dias, ${r.dias} dias úteis`}</b></div>
+      <div><span>Contada desde</span><b class="num">${an?fmtE(an):'sem data de chegada'}</b>${c.folgaV2?.ancora?'<small class="muted" style="display:block">data ajustada pelo RH</small>':'<small class="muted" style="display:block">primeira chegada em obra</small>'}</div>
+      ${r.exc?`<div><span>Motivo da exceção</span><b>${esc(c.folgaV2.motivo||'')}</b><small class="muted" style="display:block">aprovada por ${esc(c.folgaV2.aprov?.por||'')} em ${fmtE(c.folgaV2.aprov?.em)}</small></div>`:''}</div>
+      <div class="tbl-wrap"><table><thead><tr><th>Folga</th><th>Dias úteis de folga</th><th>Sai e volta</th><th>Situação</th><th></th></tr></thead><tbody>${prox.map(lin).join('')||`<tr><td colspan="5" class="empty">${an?'Nenhuma folga prevista no próximo ano.':'Informe a data da primeira chegada em obra para calcular as folgas.'}</td></tr>`}</tbody></table></div>
+      ${ant.length?`<details class="arq-hist" style="margin:0 16px 8px"><summary>Folgas anteriores</summary><ul>${ant.map(x=>`<li>${x.n}ª · ${fmtE(x.seg)} · ${EST_ROT[x.est][0].toLowerCase()}${x.est==='sugerida'?' (não registrada)':''}</li>`).join('')}</ul></details>`:''}
+      <div class="panel-b"><div class="actions" style="gap:8px;flex-wrap:wrap">${edC?`<button class="btn small" data-act="folgaAncora" data-id="${id}">Ajustar data da primeira chegada</button><button class="btn small" data-act="folgaExc" data-id="${id}">${r.exc?'Alterar exceção':'Registrar exceção'}</button>${r.exc?`<button class="btn small ghost" data-act="folgaPadrao" data-id="${id}">Voltar à folga padrão</button>`:''}`:''}</div>
+      <p class="note" style="margin:8px 0 0">A folga é de segunda a sexta: a pessoa sai no sábado e volta na segunda seguinte; os dias de viagem já estão dentro desse período. Quando os dias completam no meio da semana, o sistema sugere a segunda-feira seguinte, e o RH e o Adm. da obra confirmam ou ajustam. Feriado no meio da semana não prorroga. As folgas contam sempre da primeira chegada em obra, mesmo depois de uma folga, de férias ou de transferência. Férias que começam até 30 dias antes ou depois de uma folga ficam no lugar dela.</p></div>`;
+  }
+  /* cidades e ajuda de custo: só quem lê o registro pessoal */
+  let viag='';
+  if(vc){const cid=c.cidades||{};const v=viagemColab(c);const o=O(c.obraId);
+    const edCid=(pode('editarCadastro')||pode('confirmarFolga'))&&noEscopoC(c);
+    const sug=!munOk(cid.origem)&&MUN.lista&&c.end?.cidade?munAchar(`${c.end.cidade}${c.end.uf?' / '+c.end.uf:''}`):null;
+    const dev=ajudasDevidas(c,addD(hoje,180));
+    const linA=dev.map(a=>`<tr><td>${esc(a.tipo)}${a.ref?' '+a.ref+'ª':''}${a.obs?`<div class="muted" style="font-size:12px">${esc(a.obs)}</div>`:''}</td><td class="num">${fmtE(a.data)}</td><td class="num">${a.trechos}</td><td class="num">${a.naoDevida?'não devida':a.valor==null?'—':brl(a.valor)}</td>
+      <td>${a.paga?`${esc(a.paga.modo)} · ${brl(a.paga.valor)} em ${fmtE(a.paga.pago)}<div class="muted" style="font-size:12px">por ${esc(a.paga.por)}</div>`:a.naoDevida?`<span class="muted">${esc(c.desligamento.tipo)}</span>`:pode('confirmarFolga')&&noEscopoC(c)?`<button class="btn small" data-act="ajudaPagar" data-id="${id}" data-t="${esc(a.tipo)}" data-r="${esc(a.ref)}">Registrar pagamento</button>`:'<span class="muted">a pagar</span>'}</td></tr>`).join('');
+    viag=`<div class="panel-b facts" style="border-top:1px solid var(--line)">
+      <div><span>Cidade de origem</span><b>${munOk(cid.origem)?esc(munTxt(cid.origem)):'<span class="muted">não informada</span>'}</b>${sug?`<small class="muted" style="display:block">endereço: ${esc(munTxt(sug))}</small>`:''}</div>
+      <div><span>Cidade natal</span><b>${munOk(cid.natal)?esc(munTxt(cid.natal)):'<span class="muted">não informada</span>'}</b></div>
+      <div><span>Destino (cidade da obra)</span><b>${obraMun(c.obraId)?esc(munTxt(obraMun(c.obraId))):'<span class="muted">cidade da obra não escolhida em Configurações › Viagens e folgas</span>'}</b></div>
+      <div><span>Distância</span><b class="num">${v?`${v.km.toLocaleString('pt-BR')} km`:'—'}</b>${v?`<small class="muted" style="display:block">${v.reta.toLocaleString('pt-BR')} km em linha reta × ${esc(String(v.fator).replace('.',','))} · ${esc(v.faixa)}</small>`:''}</div>
+      <div><span>Ajuda de custo por trecho</span><b class="num">${v?brl(v.valorTrecho):'—'}</b>${v?`<small class="muted" style="display:block">por folga (ida e volta): ${brl(2*v.valorTrecho)}</small>`:''}</div>
+      ${edCid?`<div><span>&nbsp;</span><button class="btn small" data-act="cidEditar" data-id="${id}">Alterar cidades</button></div>`:''}</div>
+      <div class="tbl-wrap"><table><thead><tr><th>Ajuda de custo</th><th>Data</th><th>Trechos</th><th>Valor previsto</th><th>Pagamento</th></tr></thead><tbody>${linA||'<tr><td colspan="5" class="empty">Nada previsto.</td></tr>'}</tbody></table></div>
+      <div class="panel-b"><p class="note" style="margin:0">Ida: 1 trecho. Cada folga: 2 trechos (ida e volta). Volta: 1 trecho, não paga em pedido de demissão nem em justa causa. O valor do trecho vem da faixa de km entre a cidade de origem e a cidade da obra (Configurações › Viagens e folgas). Pagar em dinheiro ou comprar a passagem é decidido caso a caso.</p></div>`}
+  return `<section class="panel"><div class="panel-h"><h3>Folga de campo${vc?' e viagens':''}</h3><span class="sub">${m==='anterior'?'escala anterior':'calculada pelo sistema'}</span></div>${corpo}${viag}</section>`}
+const fichaTabV17v=fichaTab;
+fichaTab=function(c){let h=fichaTabV17v(c);
+  try{
+    if(UI.fichaTab==='obras'&&c.regime==='Alojado'){const p=folgaPainel(c);if(p)h=h.replace('<div class="sec-t">Ausências e folgas</div>',()=>p+'<div class="sec-t">Ausências e folgas</div>')}
+    if(c.regime==='Alojado'&&folgaModo(c)!=='anterior'&&h.includes('<div class="sec-t full">Folga de campo</div>')){const i=h.indexOf('<div class="sec-t full">Folga de campo</div>'),j=h.indexOf('<div class="sec-t full">Benefícios</div>');
+      if(i>=0&&j>i)h=h.slice(0,i)+`<div class="sec-t full">Folga de campo</div><div class="note full">A folga de campo é calculada pelo sistema (${(r=>r.exc?`exceção: a cada ${r.ciclo} dias`:`${grupoFuncao(c.funcaoId)==='indireta'?'indireta':'direta'}: a cada ${r.ciclo} dias`)(folgaRegra(c))}, ${folgaRegra(c).dias} dias úteis). Confirme datas e registre exceções em <b>Obras e ausências</b>.</div>`+h.slice(j)}
+    if(UI.fichaTab==='resumo'&&c.regime==='Alojado'&&folgaModo(c)!=='anterior'){const r=folgaRegra(c);
+      h=h.replace(/<div><span>Escala de folga<\/span><b>[^<]*<\/b><\/div>/,`<div><span>Folga de campo</span><b>${r.exc?'Exceção: ':''}a cada ${r.ciclo} dias · ${r.dias} dias úteis</b></div>`);
+      const pf=proximaFolga(c);const cf=(folgasCiclo(c,addD(hoje,400))||[]).find(x=>x.est==='confirmada'&&x.reg&&x.reg.fim>=hoje);const px=cf&&(!pf||cf.inicio<pf.inicio)?cf:null;
+      h=h.replace(/<div><span>Próxima folga de campo<\/span><b class="num">[^<]*<\/b><\/div>/,`<div><span>Próxima folga de campo</span><b class="num">${px?`${fmtE(px.seg)} a ${fmtE(px.sex)} (confirmada)`:pf?`${fmtE(pf.seg)} a ${fmtE(pf.sex)} (sugerida)`:'—'}</b></div>`)}
+  }catch(e){console.error('v18 ficha',e)}
+  return h};
+
+/* ---------- ações da folga ---------- */
+function folgaReg(c){c.folgaV2??={modo:folgaModo(c)==='anterior'?'anterior':'padrao'};c.folgaV2.conf??={};c.folgaV2.puladas??={};return c.folgaV2}
+const folgaN=(c,n)=>(folgasCiclo(c,addD(hoje,800))||[]).find(x=>x.n===+n);
+function folgaPrevia(){const f=document.querySelector('#layer .modal form');const box=document.getElementById('folPrev');if(!f||!box)return;const c=C(f.dataset.folId);if(!c)return;
+  const seg=f.querySelector('[name="seg"]')?.value||'';if(!seg){box.innerHTML='';return}
+  const r=folgaRegra(c);const err=[];if(dow(seg)!==1)err.push('Escolha uma segunda-feira.');if(seg<=hoje)err.push('Escolha uma data futura.');
+  const sex=uteisFim(seg,r.dias),sai=addD(seg,-2),volta=proxSeg(addD(sex,1));const fim=addD(volta,-1);
+  const sobre=(c.ausencias||[]).find(a=>!(a.tipo==='Folga de campo'&&+a.folgaN===+f.dataset.folN)&&a.inicio<=fim&&(!a.fim||a.fim>=sai));if(sobre)err.push(`Coincide com ${sobre.tipo.toLowerCase()} de ${fmtE(sobre.inicio)}${sobre.fim?' a '+fmtE(sobre.fim):''}.`);
+  box.innerHTML=`<div class="note" style="margin:0">Folga de <b>${esc(fmtDSE(seg))}</b> a <b>${esc(fmtDSE(sex))}</b>. Sai ${esc(fmtDSE(sai))} e volta ${esc(fmtDSE(volta))}.</div>${err.length?`<div class="banner" style="border-left-color:var(--crit);margin-top:8px">${err.map(esc).join('<br>')}</div>`:''}`;
+  return err}
+document.addEventListener('input',e=>{if(e.target.dataset?.fol)folgaPrevia()});document.addEventListener('change',e=>{if(e.target.dataset?.fol)folgaPrevia()});
+Object.assign(ACT,{
+  folgaConf:b=>{const c=C(b.dataset.id);const x=c&&folgaN(c,b.dataset.n);if(!x)return toast('Folga não encontrada. Atualize a tela.',true);
+    modal(`Confirmar a ${x.n}ª folga de campo · ${esc(c.nome)}`,`<div class="field full"><label for="fol-seg">Segunda-feira de início</label><input class="inp" type="date" id="fol-seg" name="seg" value="${esc(x.reg?.inicio?addD(x.reg.inicio,2):x.seg)}" data-fol="1"></div>
+      <div class="full" id="folPrev" aria-live="polite"></div><div class="field full"><label for="fol-ob">Observação (opcional)</label><input class="inp" id="fol-ob" name="obs" maxlength="200" placeholder="Ex.: combinado com o Adm. da obra"></div>
+      <p class="note full" style="margin:0">Os ${folgaRegra(c).dias} dias completam em ${esc(fmtDSE(x.ref))}. Combine a data com o Adm. da obra. A data da próxima folga não muda: ela continua contada da primeira chegada.</p>`,'Confirmar folga',fd=>{
+      const f=document.querySelector('#layer .modal form');const err=folgaPrevia()||[];if(err.length){toast(err[0],true);return false}
+      const r=folgaRegra(c);const seg=fd.seg,sex=uteisFim(seg,r.dias),sai=addD(seg,-2),fim=addD(proxSeg(addD(sex,1)),-1);
+      const v=folgaReg(c);v.conf[x.n]={seg,por:perfilNome(),em:hoje};c.ausencias??=[];
+      const a=c.ausencias.find(y=>y.tipo==='Folga de campo'&&+y.folgaN===x.n);
+      if(a){a.inicio=sai;a.fim=fim}else c.ausencias.push({id:uid(),tipo:'Folga de campo',inicio:sai,fim,confirmado:false,folgaN:x.n});
+      c.historico.push({data:hoje,tipo:'Folga de campo',texto:`${a?'Data da':'Confirmada a'} ${x.n}ª folga de campo: ${fmtE(seg)} a ${fmtE(sex)} (sai ${fmtE(sai)}, volta ${fmtE(addD(fim,1))}).${fd.obs?' '+fd.obs:''}`,autor:perfilNome()});
+      save();render();toast('Folga confirmada.')});
+    const f=document.querySelector('#layer .modal form');if(f){f.dataset.folId=c.id;f.dataset.folN=x.n;f.dataset.rasc=''}setTimeout(folgaPrevia,0)},
+  folgaPular:b=>{const c=C(b.dataset.id);const x=c&&folgaN(c,b.dataset.n);if(!x)return;
+    modal(`A ${x.n}ª folga não vai acontecer?`,`<div class="field full"><label for="fol-mt">Motivo</label><input class="inp" id="fol-mt" name="motivo" required maxlength="200" placeholder="Ex.: preferiu juntar com as férias"></div><p class="note full" style="margin:0">A folga seguinte continua prevista na data normal. Dá para voltar atrás depois.</p>`,'Registrar',fd=>{
+      const mt=String(fd.motivo||'').trim();if(!mt)return toast('Informe o motivo.',true),false;const v=folgaReg(c);v.puladas[x.n]={motivo:mt,por:perfilNome(),em:hoje};
+      c.historico.push({data:hoje,tipo:'Folga de campo',texto:`A ${x.n}ª folga de campo (${fmtE(x.seg)}) não vai acontecer: ${mt}.`,autor:perfilNome()});save();render()})},
+  folgaVoltar:b=>{const c=C(b.dataset.id);if(!c)return;const v=folgaReg(c);const n=+b.dataset.n;if(!v.puladas[n])return;delete v.puladas[n];
+    c.historico.push({data:hoje,tipo:'Folga de campo',texto:`A ${n}ª folga de campo voltou a ser prevista.`,autor:perfilNome()});save();render()},
+  folgaDesfazer:b=>{const c=C(b.dataset.id);const n=+b.dataset.n;const a=c&&(c.ausencias||[]).find(y=>y.tipo==='Folga de campo'&&+y.folgaN===n);if(!a)return;
+    if(a.inicio<=hoje)return toast('A folga já começou. Para encerrar antes, registre o retorno.',true);
+    modalD(`Desfazer a confirmação da ${n}ª folga?`,'<p class="full" style="margin:0">A folga volta a aparecer como sugerida, na data calculada.</p>','Desfazer',()=>{
+      c.ausencias=c.ausencias.filter(y=>y!==a);const v=folgaReg(c);delete v.conf[n];
+      c.historico.push({data:hoje,tipo:'Folga de campo',texto:`Confirmação da ${n}ª folga de campo desfeita (${fmtE(a.inicio)} a ${fmtE(a.fim)}).`,autor:perfilNome()});save();render()})},
+  folgaAplicar:b=>{const c=C(b.dataset.id);if(!c)return;const g=grupoFuncao(c.funcaoId);const p=folgaPad()[g];
+    modal(`Aplicar a folga padrão · ${esc(c.nome)}`,`<p class="full" style="margin:0">${esc(F(c.funcaoId)?.nome||'')}: mão de obra ${g}, folga a cada ${p.ciclo} dias com ${p.dias} dias úteis, contada da primeira chegada em obra.</p>${fld('Primeira chegada em obra pela NTN','ancora',primeiraChegada(c),'date')}
+      <p class="note full" style="margin:0">A escala anterior deixa de valer. Folgas já registradas em Ausências continuam como estão.</p>`,'Aplicar',fd=>{
+      if(!fd.ancora||fd.ancora>hoje)return toast('Informe a data da primeira chegada (até hoje).',true),false;
+      const v=folgaReg(c);v.modo='padrao';if(fd.ancora!==primeiraChegada(c))v.ancora=fd.ancora;else delete v.ancora;
+      c.historico.push({data:hoje,tipo:'Folga de campo',texto:`Folga padrão aplicada (a cada ${p.ciclo} dias, ${p.dias} dias úteis, desde ${fmtE(fd.ancora)}). Escala anterior: ${c.folga?.campo}×${c.folga?.folga}.`,autor:perfilNome()});save();render();toast('Folga padrão aplicada.')})},
+  folgaAncora:b=>{const c=C(b.dataset.id);if(!c)return;
+    modal(`Primeira chegada em obra · ${esc(c.nome)}`,`${fld('Data da primeira chegada em obra pela NTN','ancora',folgaAncora(c),'date')}<div class="field full"><label for="fol-am">Motivo</label><input class="inp" id="fol-am" name="motivo" required maxlength="200"></div><p class="note full" style="margin:0">Pelo sistema, a primeira chegada é ${fmtE(primeiraChegada(c))}. Todas as folgas são contadas a partir dessa data.</p>`,'Salvar',fd=>{
+      const mt=String(fd.motivo||'').trim();if(!fd.ancora||fd.ancora>hoje)return toast('Informe uma data até hoje.',true),false;if(!mt)return toast('Informe o motivo.',true),false;
+      const v=folgaReg(c);if(v.modo==='anterior')v.modo='padrao';const ant=folgaAncora(c);if(fd.ancora===primeiraChegada(c))delete v.ancora;else v.ancora=fd.ancora;
+      c.historico.push({data:hoje,tipo:'Folga de campo',texto:`Data da primeira chegada em obra (base das folgas): ${fmtE(ant)} → ${fmtE(fd.ancora)}. ${mt}.`,autor:perfilNome()});save();render()})},
+  folgaExc:b=>{const c=C(b.dataset.id);if(!c)return;const v0=c.folgaV2||{};const r=folgaRegra(c);
+    const opts=(DB.cfg.escalas||[]).map(e=>`<option value="${e.campo}">${esc(e.nome)}</option>`).join('');
+    modal(`Exceção de folga · ${esc(c.nome)}`,`<div class="field"><label for="fol-ec">Folga a cada (dias)</label><input class="inp num" id="fol-ec" name="ciclo" inputmode="numeric" value="${esc(r.ciclo)}" list="fol-esc"><datalist id="fol-esc">${opts}</datalist></div>
+      <div class="field"><label for="fol-ed">Dias úteis de folga</label><input class="inp num" id="fol-ed" name="dias" inputmode="numeric" value="${esc(r.dias)}"></div>
+      <div class="field full"><label for="fol-em">Motivo</label><input class="inp" id="fol-em" name="motivo" required maxlength="200" value="${esc(v0.modo==='excecao'?v0.motivo||'':'')}"></div>
+      <p class="note full" style="margin:0">A exceção vale só para esta pessoa e fica registrada com o seu nome como aprovador. As folgas continuam contadas da primeira chegada.</p>`,'Salvar exceção',fd=>{
+      const ci=Math.round(+fd.ciclo),di=Math.round(+fd.dias),mt=String(fd.motivo||'').trim();
+      if(!(ci>=7&&ci<=365))return toast('Folga a cada: informe de 7 a 365 dias.',true),false;if(!(di>=1&&di<=10))return toast('Dias úteis: informe de 1 a 10.',true),false;if(!mt)return toast('Informe o motivo.',true),false;
+      const v=folgaReg(c);Object.assign(v,{modo:'excecao',ciclo:ci,dias:di,motivo:mt,aprov:{por:perfilNome(),em:hoje}});
+      c.historico.push({data:hoje,tipo:'Folga de campo',texto:`Exceção de folga: a cada ${ci} dias, ${di} dias úteis. ${mt}.`,autor:perfilNome()});save();render();toast('Exceção registrada.')})},
+  folgaPadrao:b=>{const c=C(b.dataset.id);if(!c)return;modalD('Voltar à folga padrão?','<p class="full" style="margin:0">A exceção deixa de valer e as próximas folgas seguem a regra da função.</p>','Voltar à padrão',()=>{
+    const v=folgaReg(c);v.modo='padrao';['ciclo','dias','motivo','aprov'].forEach(k=>delete v[k]);c.historico.push({data:hoje,tipo:'Folga de campo',texto:'Exceção de folga encerrada: volta à folga padrão da função.',autor:perfilNome()});save();render()})},
+  cidEditar:b=>{const c=C(b.dataset.id);if(!c)return;if(!podeVerCusto())return;
+    munCarregar().then(()=>{const cid=c.cidades||{};const sug=!munOk(cid.origem)&&c.end?.cidade?munAchar(`${c.end.cidade}${c.end.uf?' / '+c.end.uf:''}`):null;
+      modal(`Cidades · ${esc(c.nome)}`,`<div class="field full"><label for="cid-o">Cidade de origem (de onde viaja para a obra)</label>${munCampo('cid-o',munOk(cid.origem)?cid.origem:sug,'name="origem"')}</div>
+        <div class="field full"><label for="cid-n">Cidade natal</label>${munCampo('cid-n',munOk(cid.natal)?cid.natal:null,'name="natal"')}</div>
+        ${sug?`<p class="note full" style="margin:0">Sugestão a partir do endereço: ${esc(munTxt(sug))}. Confira antes de salvar.</p>`:''}`,'Salvar cidades',fd=>{
+        const o=fd.origem.trim()?munAchar(fd.origem):null,n=fd.natal.trim()?munAchar(fd.natal):null;
+        if(fd.origem.trim()&&!o)return toast('Cidade de origem: escolha uma cidade da lista (cidade / UF).',true),false;
+        if(fd.natal.trim()&&!n)return toast('Cidade natal: escolha uma cidade da lista (cidade / UF).',true),false;
+        const ant=c.cidades||{};c.cidades={origem:munRef(o),natal:munRef(n)};
+        const mud=[];if(munTxt(ant.origem)!==munTxt(o))mud.push('origem');if(munTxt(ant.natal)!==munTxt(n))mud.push('natal');
+        if(mud.length)c.historico.push({data:hoje,tipo:'Cadastro',texto:`Cidade ${mud.join(' e ')} atualizada.`,autor:perfilNome()});save();render();toast('Cidades salvas.')})}).catch(()=>toast(MUN.erro,true))},
+  ajudaPagar:b=>{const c=C(b.dataset.id);if(!c||!podeVerCusto())return;const t=b.dataset.t,r=b.dataset.r;const a=ajudasDevidas(c).find(x=>x.tipo===t&&String(x.ref)===String(r));if(!a)return;
+    modal(`Ajuda de custo paga · ${esc(c.nome)}`,`<p class="full" style="margin:0">${esc(t)}${r?' '+esc(r)+'ª':''} · ${a.trechos} trecho(s) · previsto ${a.valor==null?'— (sem cidade de origem ou cidade da obra)':brl(a.valor)}</p>
+      <div class="field"><label for="aj-v">Valor pago (R$)</label><input class="inp num" id="aj-v" name="valor" inputmode="decimal" value="${a.valor==null?'':esc(String(a.valor).replace('.',','))}"></div>
+      <div class="field"><label for="aj-m">Forma</label><select class="inp" id="aj-m" name="modo"><option>Dinheiro</option><option>Passagem comprada</option></select></div>
+      ${fld('Data do pagamento','pago',hoje,'date')}<div class="field full"><label for="aj-o">Observação (opcional)</label><input class="inp" id="aj-o" name="obs" maxlength="200"></div>`,'Registrar pagamento',fd=>{
+      const val=numBR(fd.valor);if(!(val>=0)||String(fd.valor).trim()==='')return toast('Informe o valor pago.',true),false;if(val>50000||(a.valor>0&&val>3*a.valor))return toast(`Valor muito acima do previsto (${brl(a.valor)}). Confira o número.`,true),false;if(!fd.pago||fd.pago>hoje)return toast('Informe uma data até hoje.',true),false;
+      if(ajudaPaga(c,t,r||null))return toast('Este pagamento já foi registrado.',true),false;
+      const v=viagemColab(c);(c.ajudas??=[]).push({id:(t==='Férias'?'Folga':t)+'|'+(r||''),tipo:t,ref:r,trechos:a.trechos,km:v?.km??null,faixa:v?.faixa||'',valorTrecho:v?.valorTrecho??null,valor:Math.round(val*100)/100,modo:fd.modo,pago:fd.pago,por:perfilNome(),obs:String(fd.obs||'').slice(0,200)});
+      c.historico.push({data:fd.pago,tipo:'Ajuda de custo',texto:`Ajuda de custo registrada: ${t}${r?' '+r+'ª':''} (${fd.modo.toLowerCase()}).`,autor:perfilNome()});save();render();toast('Pagamento registrado.')})},
+});
+Object.assign(ACT_PERM,{folgaConf:'confirmarFolga',folgaPular:'confirmarFolga',folgaVoltar:'confirmarFolga',folgaDesfazer:'confirmarFolga',ajudaPagar:'confirmarFolga',
+  folgaAplicar:'editarCadastro',folgaAncora:'editarCadastro',folgaExc:'editarCadastro',folgaPadrao:'editarCadastro'});
+
+/* férias × folga: aviso quando a programação vai substituir uma folga ou bater com uma folga confirmada */
+const ferValidarV17=ferValidar;
+ferValidar=function(c,n,novas,abono){const r=ferValidarV17(c,n,novas,abono);
+  try{if(folgaModo(c)==='padrao'||folgaModo(c)==='excecao'){const l=folgasCiclo(c,addD(hoje,800))||[];
+    for(const x of novas.filter(y=>y.inicio&&+y.dias>=1))for(const f of l){if(f.passou||f.est==='pulada')continue;const d=Math.abs((parse(x.inicio)-parse(f.seg))/864e5);
+      if(d<=30){if(f.est==='confirmada'&&f.reg)r.avisos.push(`A ${f.n}ª folga de campo (${fmtE(f.seg)}) já está confirmada e fica a até 30 dias destas férias. Pela regra, as férias ficam no lugar da folga: desfaça a confirmação da folga em Folga de campo.`);
+        else if(f.est!=='ferias')r.avisos.push(`Estas férias ficam no lugar da ${f.n}ª folga de campo (${fmtE(f.seg)}), que começaria até 30 dias antes ou depois.`)}}}}catch(e){}
+  return r};
+
+/* ---------- alertas ---------- */
+const alertasBaseV17v=alertasBase;
+alertasBase=function(){const A=DB.cfg.antecedencia||{};const v18=c=>{const m=folgaModo(c);return m==='padrao'||m==='excecao'};
+  const out=alertasBaseV17v().filter(a=>!(a.tipo==='Folga de campo'&&v18(a.c)));const extra=[];
+  DB.colabs.forEach(c=>{if(c.status!=='Ativo'&&c.status!=='Férias'&&c.status!=='Afastado'||!v18(c))return;
+    for(const f of folgasCiclo(c,addD(hoje,60))||[]){if(f.passou)continue;
+      if(f.est==='sugerida'&&dias(f.sai)<=30)extra.push({c,tipo:'Folga de campo',desc:`Confirmar a ${f.n}ª folga de campo com o Adm. da obra (sugerida: ${fmtCE(f.seg)} a ${fmtCE(f.sex)}, sai ${fmtCE(f.sai)})`,data:f.sai});
+      else if(f.est==='confirmada'&&f.sai>=hoje&&!ajudaPaga(c,'Folga',f.n)&&dias(f.sai)<=30&&podeVerCusto())extra.push({c,tipo:'Folga de campo',desc:`Providenciar a ajuda de custo da ${f.n}ª folga (sai ${fmtCE(f.sai)})`,data:addD(f.sai,-3)})}});
+  extra.forEach(a=>{a.d=dias(a.data);a.acao=a.d<=(A[a.tipo]??7)});
+  return out.concat(extra).sort((a,b)=>a.d-b.d)};
+
+/* ---------- relatório de provisão (só quem vê custos) ---------- */
+REL_META.ajudaCusto={g:'Pessoal',d:'Ajuda de custo prevista e paga por obra e mês: idas, folgas e voltas.',f:['obra','vinc'],p:'verCustoViagem'};
+RELS.ajudaCusto={nome:'Ajuda de custo de viagem',cols:['Obra','Mês','Nome','Tipo','Data','Trechos','Distância (km)','Valor previsto','Situação'],
+  rows:()=>{if(!podeVerCusto())return [];const lim=addD(hoje,365);const out=[];
+    DB.colabs.filter(c=>c.regime==='Alojado'&&fR(c)).forEach(c=>{const v=viagemColab(c);
+      ajudasDevidas(c,lim).forEach(a=>{if(!a.paga&&(a.data<addD(hoje,-60)||a.data>lim))return;if(a.naoDevida&&!a.paga)return;
+        out.push([nomeObra(c.obraId),a.data.slice(0,7).split('-').reverse().join('/'),c.nome,a.tipo+(a.ref?' '+a.ref+'ª':''),fmtE(a.data),a.trechos,v?v.km:'—',a.paga?brl(a.paga.valor):a.valor==null?'sem cidade':brl(a.valor),a.paga?`pago em ${fmtE(a.paga.pago)}`:a.est==='sugerida'?'previsto (folga sugerida)':'previsto'])})});
+    return out.sort((a,b)=>a[0].localeCompare(b[0])||a[4].split('/').reverse().join('').localeCompare(b[4].split('/').reverse().join('')))}};
+
+/* ---------- Configurações › Viagens e folgas ---------- */
+function cfgViagem(){const ed=pode('configurar');const dis=ed?'':'disabled';const vc=podeVerCusto();const ec=podeEditarCusto();const g=custos();const p=folgaPad();
+  if(!MUN.lista&&!MUN.erro)munCarregar().then(()=>{if(UI.view==='cfg'&&UI.cfgTab==='viagem')render()}).catch(()=>{if(UI.view==='cfg')render()});
+  const obras=(DB.cfg.obras||[]).map((o,i)=>{const oc=obraCfg(o.id);const sug=ec&&!munOk(oc.mun)&&MUN.lista&&o.cidade?munAchar(o.cidade):null;
+    return `<tr><td><b>${esc(o.nome)}</b><div class="muted" style="font-size:12px">${esc(o.cidade||'')}</div></td><td>${ec?munCampo('ob-mun-'+i,oc.mun,`data-chg="obraMun" data-i="${i}" aria-label="Cidade da obra ${esc(o.nome)}"`):esc(munTxt(oc.mun))||'—'}${sug?`<div style="margin-top:4px"><button class="btn small" data-act="obraMunSug" data-i="${i}" data-cod="${sug.cod}">Usar ${esc(munTxt(sug))}</button></div>`:''}</td>
+      <td><input class="inp" value="${esc(oc.jornada||'')}" placeholder="padrão da empresa" data-chg="obraTxt" data-i="${i}" data-f="jornada" aria-label="Jornada da obra" maxlength="200" ${ec?'':'disabled'}></td>
+      <td><input class="inp" value="${esc(oc.regrasAloj||'')}" placeholder="padrão da empresa" data-chg="obraTxt" data-i="${i}" data-f="regrasAloj" aria-label="Regras do alojamento" maxlength="300" ${ec?'':'disabled'}></td></tr>`}).join('');
+  const fx=faixasOrd();
+  return `${MUN.erro?`<section class="panel" style="grid-column:1/-1"><div class="panel-b"><div class="banner" style="margin:0">${esc(MUN.erro)}</div></div></section>`:''}
+  <section class="panel" style="grid-column:1/-1"><div class="panel-h"><h3>Folga de campo padrão</h3><span class="sub">vale para quem está alojado</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Grupo</th><th>Folga a cada (dias)</th><th>Dias úteis de folga</th></tr></thead><tbody>
+    ${['indireta','direta'].map(k=>`<tr><td><b>Mão de obra ${k}</b></td><td><input class="inp num" type="number" min="7" max="365" value="${p[k].ciclo}" data-chg="folgaPadCfg" data-k="${k}" data-f="ciclo" aria-label="Folga a cada, ${k}" style="max-width:100px" ${dis}></td><td><input class="inp num" type="number" min="1" max="10" value="${p[k].dias}" data-chg="folgaPadCfg" data-k="${k}" data-f="dias" aria-label="Dias úteis, ${k}" style="max-width:100px" ${dis}></td></tr>`).join('')}</tbody></table></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Função</th><th>Grupo</th></tr></thead><tbody>${DB.cfg.funcoes.map((f,i)=>`<tr><td>${esc(f.nome)}</td><td><select class="inp" data-chg="funcGrupo" data-i="${i}" aria-label="Grupo de ${esc(f.nome)}" ${dis}><option value="direta" ${grupoFuncao(f.id)==='direta'?'selected':''}>Direta</option><option value="indireta" ${grupoFuncao(f.id)==='indireta'?'selected':''}>Indireta</option></select></td></tr>`).join('')}</tbody></table></div>
+    <div class="panel-b"><p class="note" style="margin:0">As folgas contam sempre da primeira chegada em obra. A data sugerida é a segunda-feira seguinte; o RH e o Adm. da obra confirmam. Feriado não prorroga.</p></div></section>
+  ${vc?`<section class="panel" style="grid-column:1/-1"><div class="panel-h"><h3>Cidade de cada obra</h3><span class="sub">destino das viagens e texto da proposta</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Obra</th><th>Cidade (lista do IBGE)</th><th>Jornada, se diferente do padrão</th><th>Regras do alojamento, se diferentes</th></tr></thead><tbody>${obras||'<tr><td colspan="4" class="empty">Nenhuma obra cadastrada.</td></tr>'}</tbody></table></div>
+    <div class="panel-b"><p class="note" style="margin:0">A viagem termina sempre na cidade da obra. Jornada e regras em branco usam o padrão da empresa (Configurações › Proposta). Só RH e Diretoria alteram.</p></div></section>`:''}
+  ${vc?`<section class="panel" style="grid-column:1/-1"><div class="panel-h"><h3>Ajuda de custo por faixa de distância</h3><span class="sub">${DB.custos?`valores da NTN`:'valores sugeridos; ainda não salvos'}</span></div>
+    <div class="panel-b facts"><div><span>Fator de correção sobre a linha reta</span>${ec?`<input class="inp num" inputmode="decimal" value="${esc(String(g.fator).replace('.',','))}" data-chg="custoFator" aria-label="Fator de correção" style="max-width:100px">`:`<b>${esc(String(g.fator).replace('.',','))}</b>`}</div></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Faixa</th><th>Até (km)</th><th>Valor por trecho (R$)</th><th>Por folga, ida e volta</th></tr></thead><tbody>
+    ${fx.map((x,i)=>`<tr><td>${esc(faixaRot(i))}</td><td>${x.ate==null?'—':ec?`<input class="inp num" type="number" min="1" value="${esc(x.ate)}" data-chg="custoFaixa" data-i="${i}" data-f="ate" aria-label="Limite da faixa ${i+1}" style="max-width:110px">`:esc(x.ate)}</td>
+      <td>${ec?`<input class="inp num" inputmode="decimal" value="${esc(String(x.valor).replace('.',','))}" data-chg="custoFaixa" data-i="${i}" data-f="valor" aria-label="Valor por trecho da faixa ${i+1}" style="max-width:120px">`:brl(x.valor)}</td><td class="num">${brl(2*(+x.valor||0))}</td></tr>`).join('')}</tbody></table></div>
+    <div class="panel-b"><p class="note" style="margin:0">Distância = linha reta entre a cidade de origem e a cidade da obra × fator. Só RH, Diretoria e Adm. de obra veem estes valores; só RH e Diretoria alteram.</p></div></section>`:''}`}
+const vCfgV17v=vCfg;
+vCfg=function(){
+  if(UI.cfgTab==='perfis'&&pode('configurar')&&DB.cfg.perms)for(const [k,l] of Object.entries(V18_PERM))if(!DB.cfg.perms[k])DB.cfg.perms[k]=l.slice();
+  let h=UI.cfgTab==='viagem'?(()=>{const t=UI.cfgTab;UI.cfgTab='funcoes';try{return vCfgV17v()}finally{UI.cfgTab=t}})():vCfgV17v();
+  h=h.replace(/(<button data-act="cfgTab" data-v="admissao")/,`<button data-act="cfgTab" data-v="viagem" aria-pressed="${UI.cfgTab==='viagem'}">Viagens e folgas</button>$1`);
+  if(UI.cfgTab==='viagem'){h=h.replace(/aria-pressed="true"/g,'aria-pressed="false"').replace('data-v="viagem" aria-pressed="false"','data-v="viagem" aria-pressed="true"');const i=h.indexOf('<div class="cfg-grid">');if(i>=0)h=h.slice(0,i)+`<div class="cfg-grid">${cfgViagem()}</div>`}
+  return h};
+const numBR=s=>{const t=String(s??'').trim().replace(/\s|R\$/g,'');if(!t)return NaN;if(/,/.test(t))return +t.replace(/\./g,'').replace(',','.');if(/^\d{1,3}(\.\d{3})+$/.test(t))return +t.replace(/\./g,'');return +t};
+Object.assign(CHG,{
+  obraMun:el=>{if(!podeEditarCusto())return;const o=DB.cfg.obras[+el.dataset.i];if(!o)return;if(!el.value.trim()){if(obraCfg(o.id).mun){delete obraCfgMat(o.id).mun;save()}render();return}
+    const m=munAchar(el.value);if(!m)return toast('Escolha uma cidade da lista (cidade / UF).',true),render();obraCfgMat(o.id).mun=munRef(m);save();render();toast(`Cidade da obra: ${munTxt(m)}.`)},
+  obraTxt:el=>{if(!podeEditarCusto())return;const o=DB.cfg.obras[+el.dataset.i];if(!o||!['jornada','regrasAloj'].includes(el.dataset.f))return;const v=el.value.trim().slice(0,300);const oc=obraCfgMat(o.id);if(v)oc[el.dataset.f]=v;else delete oc[el.dataset.f];save();render()},
+  folgaPadCfg:el=>{const k=el.dataset.k,f=el.dataset.f;if(!['direta','indireta'].includes(k)||!['ciclo','dias'].includes(f))return;const v=Math.round(+el.value);
+    if(f==='ciclo'&&!(v>=7&&v<=365))return toast('Informe de 7 a 365 dias.',true),render();if(f==='dias'&&!(v>=1&&v<=10))return toast('Informe de 1 a 10 dias úteis.',true),render();
+    const p=DB.cfg.folgaPadrao??=JSON.parse(JSON.stringify(folgaPad()));p[k]??={};p[k][f]=v;save();render()},
+  funcGrupo:el=>{const f=DB.cfg.funcoes[+el.dataset.i];if(!f||!['direta','indireta'].includes(el.value))return;f.grupo=el.value;save();render()},
+  custoFator:el=>{if(!podeEditarCusto())return;const v=numBR(el.value);if(!(v>=1&&v<=3))return toast('Fator: informe um número entre 1 e 3 (ex.: 1,30).',true),render();custosMaterializar().fator=Math.round(v*100)/100;save();render()},
+  custoFaixa:el=>{if(!podeEditarCusto())return;const g=custosMaterializar();const l=g.faixas;const real=l[+el.dataset.i];if(!real)return render();
+    if(el.dataset.f==='valor'){const v=numBR(el.value);if(!(v>=0&&v<100000))return toast('Informe um valor válido.',true),render();real.valor=Math.round(v*100)/100}
+    else{const v=Math.round(+el.value);const ant=l[+el.dataset.i-1],prox=l[+el.dataset.i+1];if(!(v>0)||(ant&&v<=+ant.ate)||(prox&&prox.ate!=null&&v>=+prox.ate))return toast('O limite precisa ficar entre o da faixa anterior e o da seguinte.',true),render();real.ate=v}
+    save();render()},
+});
+Object.assign(ACT,{obraMunSug:b=>{if(!podeEditarCusto())return;const o=DB.cfg.obras[+b.dataset.i];const m=MUN.lista&&MUN.lista.find(x=>x.cod===+b.dataset.cod);if(!o||!m)return;obraCfgMat(o.id).mun=munRef(m);save();render();toast(`Cidade da obra: ${munTxt(m)}.`)}});
+Object.assign(CHG_PERM,{obraMun:'editarCustoViagem',obraTxt:'editarCustoViagem',folgaPadCfg:'configurar',funcGrupo:'configurar',custoFator:'editarCustoViagem',custoFaixa:'editarCustoViagem'});
+Object.assign(ACT_PERM,{obraMunSug:'editarCustoViagem'});
+
+/* ---------- função Supervisor (mão de obra indireta), criada uma vez pelo RH ou Diretoria ---------- */
+function migrarV18(){if(!['rh','dir'].includes(UI.perfil)||!DB?.cfg?.funcoes||DB.cfg.funcoes.some(f=>f.id==='sup'||munNorm(f.nome)==='supervisor'))return;
+  DB.cfg.funcoes.push({id:'sup',nome:'Supervisor',cbo:'',sal:null,grupo:'indireta',tr:['nr06','nr18','nr20','integ','nr35'].filter(t=>(DB.cfg.treinamentos||[]).some(x=>x.id===t))});save()}
+setTimeout(()=>{try{comoSistema(migrarV18,'Inclusão da função Supervisor (v18)')()}catch(e){console.error('v18 migração',e)}},0);
+
+/* novas admissões já nascem na folga padrão (a escala antiga só vale para quem já estava cadastrado) */
+const novoRegistroV17=novoRegistro;
+novoRegistro=function(o){const c=novoRegistroV17(o);if(c&&o.regime==='Alojado')c.folgaV2={modo:'padrao',conf:{},puladas:{}};return c};
+
+
+/* =====================================================================
+   v18 · PROPOSTA DE EMPREGO
+   - Montada a partir da requisição e da cidade de origem do candidato.
+   - Salário único por função (tabela no registro restrito 'custos'); adicional da função.
+   - Jornada, horas extras e regras do alojamento: padrão da empresa, com ajuste por obra.
+   - Ajuda de custo por trecho conforme a distância; folga de campo pela regra da função.
+   - PDF desenhado no navegador (A4), pronto para WhatsApp ou e-mail. Validade padrão de 3 dias.
+   - Resposta registrada pelo RH: recusa com motivo; aceite cria a admissão já preenchida.
+   Valores ficam no registro 'proposta' (servidor: RH e Diretoria; Adm. da obra só lê).
+   O candidato guarda só a situação da proposta, sem valores.
+   ===================================================================== */
+PERM_DEF.push(['fazerProposta','Montar, enviar e registrar propostas de emprego','Editar',['rh']]);
+TIPO_COL.propostas='proposta';
+const PROP_PAD={jornada:'Segunda a quinta, das 7h às 17h; sexta, das 7h às 16h.',he:'Podem ocorrer trabalhos aos sábados, domingos e feriados, com horas extras: 60% aos sábados e nas horas além da jornada; 100% aos domingos e feriados.',
+  regras:'No alojamento é proibido bebida alcoólica, entrada de terceiros e som alto.',contato:'rh@ntnengenharia.com.br',validade:3};
+const propCfg=()=>({...PROP_PAD,...(custos().prop||{})});
+const ADICIONAIS=['Nenhum','Periculosidade 30%','Insalubridade 10%','Insalubridade 20%','Insalubridade 40%'];
+const adicPct=a=>({'Periculosidade 30%':.3,'Insalubridade 10%':.1,'Insalubridade 20%':.2,'Insalubridade 40%':.4})[a]||0;
+const salFuncao=fid=>{const s=custos().salarios?.[fid];return s&&+s.sal>0?{sal:+s.sal,adic:ADICIONAIS.includes(s.adic)?s.adic:'Nenhum'}:null};
+const CONTRATOS=['Experiência 45+45','Experiência 30+60','Experiência 90','Indeterminado','Prazo determinado (obra)'];
+const MOTIVOS_RECUSA=['Salário','Distância','Outra oferta','Condições da obra ou do alojamento','Folga de campo','Sem resposta do candidato','Outro'];
+const PROP=id=>(DB.propostas||[]).find(p=>p.id===id);
+const propsCand=x=>(DB.propostas||[]).filter(p=>p.candId===x.id).sort((a,b)=>a.versao-b.versao);
+function propSit(p){if(!p)return '';if(p.status==='Enviada'&&p.validade&&p.validade<hoje)return 'Vencida sem resposta';return p.status}
+const propPill=s=>pillS(s,s==='Aceita'?'good':s==='Recusada'||s==='Vencida sem resposta'?'crit':s==='Enviada'?'info':'plain');
+const podeProp=()=>pode('fazerProposta')&&podeEditarCusto();
+
+/* benefícios que entram na proposta (valores da tabela de benefícios, pelo regime) */
+function benProp(regime){return (DB.cfg.beneficios||[]).map(b=>({nome:b.nome,unid:b.unid,valor:+(regime==='Alojado'?b.alojado:b.local)||0})).filter(b=>b.valor>0&&!/^ajuda de custo$/i.test(b.nome))}
+const benMes=b=>b.unid==='dia'?b.valor*(+DB.cfg.diasUteis||22):b.valor;
+/* monta os números da proposta a partir da requisição, do candidato e do que o RH escolheu */
+function propCalcular(r,d){const fn=F(r.funcaoId);const s=salFuncao(r.funcaoId);const o=O(r.obraId);const pc=propCfg();
+  const regime=r.regime||'Alojado';const v=viagem(d.origem,obraMun(r.obraId));const g=grupoFuncao(r.funcaoId);const fp=folgaPad()[g];
+  const ben=(d.ben||benProp(regime));const adicV=s?Math.round(s.sal*adicPct(s.adic)*100)/100:0;
+  const ajudaMes=regime==='Alojado'&&v?2*v.valorTrecho*30/fp.ciclo:0;const enc=+custos().encargos||0;
+  const custo=s?Math.round((s.sal+adicV)*(1+enc/100)+ben.reduce((t,b)=>t+benMes(b),0)+ajudaMes):null;
+  return {funcaoId:r.funcaoId,funcao:fn?.nome||'',obraId:r.obraId,obra:o?.nome||'',obraMun:obraMun(r.obraId)?munRef(obraMun(r.obraId)):null,regime,
+    salario:s?.sal??null,adic:s?.adic||'Nenhum',adicValor:adicV,jornada:obraCfg(r.obraId).jornada||pc.jornada,he:pc.he,regras:regime==='Alojado'?(obraCfg(r.obraId).regrasAloj||pc.regras):'',
+    beneficios:ben,outrosBen:d.outrosBen||'',grupo:g,folgaCiclo:regime==='Alojado'?fp.ciclo:0,folgaDias:regime==='Alojado'?fp.dias:0,
+    origem:d.origem?munRef(d.origem):null,natal:d.natal?munRef(d.natal):null,km:v?.km??null,faixa:v?.faixa||'',valorTrecho:regime==='Alojado'&&v?v.valorTrecho:0,
+    ajudaForma:d.ajudaForma||'Ajuda de custo em dinheiro',contrato:d.contrato||CONTRATOS[0],apres:{data:d.apresData||'',local:d.apresLocal||''},obs:d.obs||'',
+    encargos:enc,custoMensal:custo,contato:pc.contato}}
+function propFaltas(r){const f=[];if(!salFuncao(r.funcaoId))f.push(`salário da função ${F(r.funcaoId)?.nome||''} (Configurações › Proposta)`);if(!obraMun(r.obraId))f.push(`cidade da obra ${nomeObra(r.obraId)} (Configurações › Viagens e folgas)`);return f}
+
+/* ---------- candidato: quadro da proposta ---------- */
+function propQuadro(x){const r=R(x.reqId);if(!r)return '';const ps=propsCand(x);const ult=ps[ps.length-1]||null;const vc=podeVerCusto()&&DB.propostas;
+  const fim=['Aprovado','Reprovado','Desistiu'].includes(x.etapa);const ed=podeProp()&&!fim&&reqAprovada(r);const id=esc(x.id);
+  const st=ult?propSit(ult):x.prop?(x.prop.status==='Enviada'&&x.prop.validade<hoje?'Vencida sem resposta':x.prop.status):'';
+  let h=`<div class="sec-t full">Proposta de emprego</div><div class="full">`;
+  if(!ult&&!x.prop)h+=`<p class="muted" style="margin:0 0 8px">Nenhuma proposta montada.</p>`;
+  else h+=`<div class="facts" style="margin-bottom:8px"><div><span>Situação</span><b>${propPill(st)}</b></div><div><span>Versão</span><b>${esc(String(ult?ult.versao:x.prop.versao))}</b></div>${(ult?.enviada||x.prop?.enviada)?`<div><span>Enviada em</span><b class="num">${fmtE(ult?.enviada||x.prop.enviada)}</b><small class="muted" style="display:block">válida até ${fmtE(ult?.validade||x.prop.validade)}</small></div>`:''}
+    ${vc&&ult?`<div><span>Salário</span><b class="num">${brl(ult.salario)}${ult.adicValor?` + ${esc(ult.adic.toLowerCase())}`:''}</b></div><div><span>Origem</span><b>${esc(munTxt(ult.origem))}</b><small class="muted" style="display:block">${ult.km!=null?ult.km.toLocaleString('pt-BR')+' km · '+esc(ult.faixa):''}</small></div><div><span>Ajuda por folga</span><b class="num">${ult.regime==='Alojado'?brl(2*ult.valorTrecho):'—'}</b></div><div><span>Custo mensal estimado</span><b class="num">${ult.custoMensal!=null?brl(ult.custoMensal):'—'}</b><small class="muted" style="display:block">${ult.encargos?`com ${ult.encargos}% de encargos`:'sem encargos (informe em Configurações › Proposta)'}</small></div>`:''}
+    ${ult?.resposta?`<div><span>Resposta</span><b>${esc(ult.resposta.tipo)} em ${fmtE(ult.resposta.data)}</b><small class="muted" style="display:block">${esc(ult.resposta.como||'')}${ult.resposta.motivo?' · '+esc(ult.resposta.motivo):''}</small></div>`:''}</div>`;
+  const falt=propFaltas(r);
+  if(ed){const bts=[];
+    if(!ult||['Recusada','Substituída'].includes(ult.status)||propSit(ult)==='Vencida sem resposta')bts.push(`<button type="button" class="btn primary" data-act="propMontar" data-id="${id}" ${falt.length?'disabled':''}>${ult?'Montar nova versão':'Montar proposta'}</button>`);
+    if(ult&&['Rascunho','Enviada'].includes(ult.status)){bts.push(`<button type="button" class="btn ${ult.status==='Rascunho'?'primary':''}" data-act="propPdf" data-p="${esc(ult.id)}">Baixar PDF</button>`);
+      if(ult.status==='Rascunho')bts.push(`<button type="button" class="btn" data-act="propEnviada" data-p="${esc(ult.id)}">Registrar envio</button>`,`<button type="button" class="btn ghost" data-act="propMontar" data-id="${id}">Refazer</button>`);
+      else bts.push(propSit(ult)==='Vencida sem resposta'?`<button type="button" class="btn primary" data-act="propEnviada" data-p="${esc(ult.id)}">Registrar novo envio</button>`:`<button type="button" class="btn primary" data-act="propResposta" data-p="${esc(ult.id)}">Registrar resposta</button>`,`<button type="button" class="btn ghost" data-act="propMontar" data-id="${id}">Nova versão</button>`)}
+    else if(ult&&vc)bts.push(`<button type="button" class="btn ghost" data-act="propPdf" data-p="${esc(ult.id)}">Baixar PDF</button>`);
+    h+=`<div class="actions" style="gap:8px;flex-wrap:wrap">${bts.join('')}</div>${falt.length&&(!ult||ult.status!=='Enviada')?`<p class="note" style="margin:8px 0 0">Para montar a proposta, falta cadastrar: ${falt.map(esc).join('; ')}.</p>`:''}`}
+  else if(vc&&ult)h+=`<div class="actions"><button type="button" class="btn ghost" data-act="propPdf" data-p="${esc(ult.id)}">Baixar PDF</button></div>`;
+  if(vc&&ps.length>1)h+=`<details class="arq-hist" style="margin-top:8px"><summary>Versões anteriores (${ps.length-1})</summary><ul>${ps.slice(0,-1).reverse().map(p=>`<li>Versão ${p.versao} · ${esc(propSit(p))} · ${fmtE(p.criada)}${p.resposta?.motivo?' · '+esc(p.resposta.motivo):''}</li>`).join('')}</ul></details>`;
+  return h+'</div>'}
+const abrirCandV17=abrirCand;
+abrirCand=function(id){const r0=abrirCandV17.apply(this,arguments);
+  try{const x=CAND(id);const bd=document.querySelector('#layer .modal .bd');if(!x||!bd)return r0;
+    const ap=bd.querySelector('[data-act="candAprovar"]');if(ap){ap.textContent='Aprovar sem proposta registrada';ap.classList.remove('primary');ap.classList.add('ghost')}
+    const acoes=ap?.closest('.actions');const q=propQuadro(x);if(acoes)acoes.insertAdjacentHTML('beforebegin',q);else{const tl=bd.querySelector('.timeline');if(tl)tl.insertAdjacentHTML('beforebegin',q);else bd.insertAdjacentHTML('beforeend',q)}}catch(e){console.error('v18 proposta',e)}
+  return r0};
+
+/* ---------- montar ---------- */
+function propForm(x,r,ant){const o=O(r.obraId);const regime=r.regime||'Alojado';const bens=benProp(regime);const antB=ant?new Set(ant.beneficios.map(b=>b.nome)):null;
+  const orig=ant?.origem||(MUN.lista&&x.cidade?munAchar(x.cidade):null);
+  return `<div class="field full"><label for="pr-o">Cidade de origem do candidato</label>${munCampo('pr-o',orig,'name="origem" data-prop="1" required')}</div>
+    <div class="field full"><label for="pr-n">Cidade natal (opcional)</label>${munCampo('pr-n',ant?.natal,'name="natal"')}</div>
+    ${fld('Data de apresentação','apresData',ant?.apres?.data||r.inicio||'','date')}
+    <div class="field"><label for="pr-l">Local de apresentação</label><input class="inp" id="pr-l" name="apresLocal" maxlength="200" value="${esc(ant?.apres?.local||`${/^obra\b/i.test(o?.nome||'')?'':'Obra '}${o?.nome||''}${obraMun(r.obraId)?' · '+munTxt(obraMun(r.obraId)):''}`)}"></div>
+    ${fld('Contrato','contrato',ant?.contrato||CONTRATOS[0],'',CONTRATOS)}
+    ${regime==='Alojado'?fld('Ajuda de custo','ajudaForma',ant?.ajudaForma||'Ajuda de custo em dinheiro','',['Ajuda de custo em dinheiro','Passagem comprada pela NTN']):''}
+    <div class="sec-t full">Benefícios na proposta</div>
+    <div class="full chkgrid">${bens.map((b,i)=>`<label><input type="checkbox" name="ben.${i}" ${!antB||antB.has(b.nome)?'checked':''} data-prop="1">${esc(b.nome)} · ${brl(b.valor)}/${esc(b.unid)}</label>`).join('')||'<span class="muted">Nenhum benefício com valor para o regime '+esc(regime)+' em Configurações › Benefícios.</span>'}</div>
+    <div class="field full"><label for="pr-ob">Outros benefícios (opcional)</label><input class="inp" id="pr-ob" name="outrosBen" maxlength="200" value="${esc(ant?.outrosBen||'')}" placeholder="Ex.: almoço na obra"></div>
+    <div class="field full"><label for="pr-obs">Observação na proposta (opcional)</label><textarea class="inp" id="pr-obs" name="obs" rows="2" maxlength="500">${esc(ant?.obs||'')}</textarea></div>
+    <div class="full" id="propPrev" aria-live="polite"></div>`}
+function propLer(f,r){const g=n=>f.querySelector(`[name="${n}"]`)?.value||'';const regime=r.regime||'Alojado';const bens=benProp(regime);
+  return {origem:munAchar(g('origem')),origemTxt:g('origem').trim(),natal:g('natal').trim()?munAchar(g('natal')):null,natalTxt:g('natal').trim(),apresData:g('apresData'),apresLocal:g('apresLocal').trim().slice(0,200),contrato:CONTRATOS.includes(g('contrato'))?g('contrato'):CONTRATOS[0],
+    ajudaForma:g('ajudaForma')||'Ajuda de custo em dinheiro',ben:bens.filter((b,i)=>f.querySelector(`[name="ben.${i}"]`)?.checked),outrosBen:g('outrosBen').trim().slice(0,200),obs:g('obs').trim().slice(0,500)}}
+function propErros(d){const e=[];if(!d.origem)e.push(d.origemTxt?'Cidade de origem: escolha uma cidade da lista (cidade / UF).':'Informe a cidade de origem do candidato.');if(d.natalTxt&&!d.natal)e.push('Cidade natal: escolha uma cidade da lista (cidade / UF).');
+  if(!d.apresData)e.push('Informe a data de apresentação.');else if(d.apresData<hoje)e.push('A data de apresentação já passou.');if(!d.apresLocal)e.push('Informe o local de apresentação.');return e}
+function propPreviaHtml(){const f=document.querySelector('#layer .modal form');const box=document.getElementById('propPrev');if(!f||!box)return;const x=CAND(f.dataset.propCand);const r=x&&R(x.reqId);if(!r)return;
+  const d=propLer(f,r);const p=propCalcular(r,d);const err=propErros(d);
+  box.innerHTML=`<div class="note" style="margin:0"><b>${esc(p.funcao)}</b> · ${esc(p.obra)} · salário ${brl(p.salario)}${p.adicValor?` + ${esc(p.adic.toLowerCase())} (${brl(p.adicValor)})`:''}
+    ${p.regime==='Alojado'?`<br>Folga de campo: ${p.folgaDias} dias úteis a cada ${p.folgaCiclo} dias (mão de obra ${p.grupo}).`:''}
+    ${p.regime==='Alojado'?(p.km!=null?`<br>${esc(munTxt(p.origem))} → ${esc(munTxt(p.obraMun))}: ${p.km.toLocaleString('pt-BR')} km (${esc(p.faixa)}). Ida ${brl(p.valorTrecho)} · cada folga ${brl(2*p.valorTrecho)} · volta ${brl(p.valorTrecho)}.`:'<br>Escolha a cidade de origem para calcular a ajuda de custo.'):''}
+    <br>Custo mensal estimado para a NTN: <b>${p.custoMensal!=null?brl(p.custoMensal):'—'}</b>${p.encargos?'':' (sem encargos)'}. Não aparece no PDF.</div>
+    ${err.length?`<div class="banner" style="margin-top:8px">${err.map(esc).join('<br>')}</div>`:''}`}
+document.addEventListener('input',e=>{if(e.target.closest?.('#layer .modal form[data-prop-cand]'))propPreviaHtml()});
+document.addEventListener('change',e=>{if(e.target.closest?.('#layer .modal form[data-prop-cand]'))propPreviaHtml()});
+function propMontar(x){const r=R(x.reqId);if(!r)return toast('Requisição não encontrada.',true);const falt=propFaltas(r);if(falt.length)return toast('Falta cadastrar: '+falt.join('; ')+'.',true);
+  if(!reqAprovada(r))return toast('A requisição ainda não foi aprovada.',true);
+  munCarregar().then(()=>{const ps=propsCand(x);const ant=ps[ps.length-1]||null;
+    modal(`Proposta · ${esc(x.nome)} · ${esc(F(r.funcaoId)?.nome||'')}`,propForm(x,r,ant),'Salvar proposta',fd=>{
+      const f=document.querySelector('#layer .modal form');const d=propLer(f,r);const err=propErros(d);if(err.length){propPreviaHtml();toast(err[0],true);return false}
+      const calc=propCalcular(r,d);DB.propostas??=[];
+      if(ant&&ant.status==='Rascunho'){Object.assign(ant,calc,{alterada:hoje});(ant.hist??=[]).push({data:hoje,autor:perfilNome(),texto:'Rascunho refeito.'});propEspelho(x,ant)}
+      else{if(ant&&['Enviada'].includes(ant.status)){ant.status='Substituída';ant.hist.push({data:hoje,autor:perfilNome(),texto:'Substituída por nova versão.'})}
+        const p={id:uid(),reqId:r.id,candId:x.id,candNome:x.nome,num:r.num,versao:(ant?.versao||0)+1,status:'Rascunho',criada:hoje,por:perfilNome(),...calc,hist:[{data:hoje,autor:perfilNome(),texto:'Proposta montada.'}]};
+        DB.propostas.push(p);propEspelho(x,p)}
+      x.hist.push({data:hoje,autor:perfilNome(),texto:`Proposta ${ant&&ant.status!=='Rascunho'?'(nova versão) ':''}montada.`});
+      save();closeModal();render();setTimeout(()=>abrirCand(x.id),0);toast('Proposta salva. Baixe o PDF e envie ao candidato.');return false},true);
+    const f=document.querySelector('#layer .modal form');if(f){f.dataset.propCand=x.id;f.dataset.rasc=''}setTimeout(propPreviaHtml,0)}).catch(()=>toast(MUN.erro,true))}
+function propEspelho(x,p){x.prop={id:p.id,versao:p.versao,status:p.status,enviada:p.enviada||'',validade:p.validade||'',resposta:p.resposta?{tipo:p.resposta.tipo,data:p.resposta.data}:null}}
+
+/* ---------- PDF (desenhado em tela, A4 a 200 ppp) ---------- */
+function propImg(src){return new Promise(ok=>{if(!src)return ok(null);const i=new Image();i.onload=()=>ok(i);i.onerror=()=>ok(null);i.src=src})}
+async function propPdf(p){const W=1654,H=2339,M=140;const FON='"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';const VERDE='#7AA215',LIMA='#ADD91C',TINTA='#1C1E17',CINZA='#5B5F55';
+  const lg=custos().logo;const logo=await propImg(typeof lg==='string'&&/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/.test(lg)&&lg.length<200000?lg:null);const pags=[];let ctx,y;
+  const rod=()=>{ctx.fillStyle=CINZA;ctx.font=`24px ${FON}`;ctx.textBaseline='alphabetic';ctx.fillText(`NTN Engenharia · ${p.contato||''}`,M,H-70);const t=`${p.num||''} · versão ${p.versao} · página ${pags.length}`;ctx.fillText(t,W-M-ctx.measureText(t).width,H-70)};
+  const nova=()=>{const cv=document.createElement('canvas');cv.width=W;cv.height=H;ctx=cv.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H);pags.push(cv);ctx.fillStyle=LIMA;ctx.fillRect(0,0,W,18);y=M;rod()};
+  const linhas=(txt,larg,font)=>{ctx.font=font;const out=[];for(const par of String(txt??'').split('\n')){let l='';for(const w of par.split(/\s+/).filter(Boolean)){const t=l?l+' '+w:w;if(ctx.measureText(t).width>larg&&l){out.push(l);l=w}else l=t}out.push(l)}return out};
+  const cabe=h=>{if(y+h>H-M-40)nova()};
+  const texto=(txt,{size=30,peso=400,cor=TINTA,x=M,larg=W-2*M,lh=1.45,depois=10}={})=>{const font=`${peso} ${size}px ${FON}`;const ls=linhas(txt,larg,font);for(const l of ls){cabe(size*lh);ctx.font=font;ctx.fillStyle=cor;ctx.fillText(l,x,y+size);y+=size*lh}y+=depois};
+  const LBL=420;
+  const item=(rot,val)=>{if(val==null||val==='')return;const ls=linhas(val,W-2*M-LBL,`400 30px ${FON}`);const lr=linhas(rot,LBL-30,`600 26px ${FON}`);const h=Math.max(ls.length*43.5,lr.length*38)+18;cabe(h);
+    ctx.font=`600 26px ${FON}`;ctx.fillStyle=CINZA;lr.forEach((l,i)=>ctx.fillText(l,M,y+28+i*38));ctx.font=`400 30px ${FON}`;ctx.fillStyle=TINTA;ls.forEach((l,i)=>ctx.fillText(l,M+LBL,y+30+i*43.5));
+    y+=h;ctx.strokeStyle='#E3E5DC';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(M,y-8);ctx.lineTo(W-M,y-8);ctx.stroke()};
+  const secao=t=>{cabe(110);y+=24;ctx.fillStyle=VERDE;ctx.fillRect(M,y+6,10,40);ctx.font=`700 36px ${FON}`;ctx.fillStyle=TINTA;ctx.fillText(t,M+26,y+40);y+=72};
+  nova();
+  /* cabeçalho */
+  if(logo){const k=Math.min(420/logo.width,140/logo.height);ctx.drawImage(logo,M,y,logo.width*k,logo.height*k)}else{ctx.font=`800 64px ${FON}`;ctx.fillStyle=TINTA;ctx.fillText('NTN',M,y+60);ctx.font=`600 30px ${FON}`;ctx.fillStyle=VERDE;ctx.fillText('ENGENHARIA',M,y+100)}
+  ctx.textAlign='right';ctx.font=`700 46px ${FON}`;ctx.fillStyle=TINTA;ctx.fillText('Proposta de emprego',W-M,y+50);ctx.font=`400 28px ${FON}`;ctx.fillStyle=CINZA;ctx.fillText(`Emitida em ${fmtE(p.criada)}${p.validade?` · válida até ${fmtE(p.validade)}`:''}`,W-M,y+96);ctx.textAlign='left';
+  y+=170;
+  texto(`Olá, ${String(p.candNome||'').split(' ')[0]}.`,{size:34,peso:600,depois:6});
+  texto(`A NTN Engenharia tem o prazer de apresentar esta proposta para a função de ${p.funcao}, na obra ${p.obra}${p.obraMun?`, em ${munTxt(p.obraMun).replace(' / ','/')}`:''}. Confira as condições abaixo.`,{depois:8});
+  secao('A vaga');
+  item('Função',p.funcao);item('Obra',`${p.obra}${p.obraMun?' · '+munTxt(p.obraMun).replace(' / ','/'):''}`);
+  item('Apresentação',`${p.apres.data?fmtDSE(p.apres.data):''}${p.apres.local?' · '+p.apres.local:''}`);item('Contrato',`CLT · ${p.contrato}`);
+  secao('Remuneração e jornada');
+  item('Salário',`${brl(p.salario)} por mês${p.adicValor?` + ${p.adic.toLowerCase()} (${brl(p.adicValor)})`:''}`);item('Jornada',p.jornada);item('Horas extras',p.he);
+  secao('Benefícios');
+  p.beneficios.forEach(b=>item(b.nome,`${brl(b.valor)} por ${b.unid}`));if(p.outrosBen)item('Também',p.outrosBen);if(!p.beneficios.length&&!p.outrosBen)item('Benefícios','Conforme a política da empresa.');
+  if(p.regime==='Alojado'){secao('Alojamento, folga e viagens');
+    item('Regime','Alojado: a NTN fornece o alojamento.');if(p.regras)item('Regras do alojamento',p.regras);
+    item('Folga de campo',`${p.folgaDias} dias úteis (segunda a sexta) a cada ${p.folgaCiclo} dias, contados da chegada na obra. Os dias de viagem estão dentro desse período: saída no sábado e retorno na segunda-feira.`);
+    const forma=p.ajudaForma==='Passagem comprada pela NTN'?'A NTN compra a passagem no valor de referência abaixo.':'Valor pago como ajuda de custo; a passagem é comprada pelo colaborador.';
+    item('Ajuda de custo',`Ida para a obra: ${brl(p.valorTrecho)}. A cada folga: ${brl(2*p.valorTrecho)} (ida e volta). Volta ao fim do contrato: ${brl(p.valorTrecho)}, não paga em pedido de demissão nem em justa causa. ${forma}`);
+    if(p.origem)item('Trajeto considerado',`${munTxt(p.origem).replace(' / ','/')} → ${munTxt(p.obraMun).replace(' / ','/')} (cerca de ${p.km.toLocaleString('pt-BR')} km)`)}
+  secao('Admissão');
+  item('Documentos',(DB.cfg.docs||[]).join(', ')+'.');item('Exames','Exame admissional (ASO) e treinamentos obrigatórios da função, agendados pela NTN antes do início.');
+  if(p.obs){secao('Observação');texto(p.obs)}
+  secao('Aceite');
+  texto(`Esta proposta é válida até ${p.validade?fmtE(p.validade):`${propCfg().validade} dias após o envio`}. Para aceitar, responda pelo mesmo canal em que recebeu ou assine abaixo.`,{depois:30});
+  cabe(260);ctx.strokeStyle=TINTA;ctx.lineWidth=2;[[M,(W-2*M)*0.58],[M+(W-2*M)*0.66,(W-2*M)*0.34]].forEach(([x0,w])=>{ctx.beginPath();ctx.moveTo(x0,y+120);ctx.lineTo(x0+w,y+120);ctx.stroke()});
+  ctx.font=`400 26px ${FON}`;ctx.fillStyle=CINZA;ctx.fillText(`${p.candNome} · li e aceito esta proposta`,M,y+160);ctx.fillText('Data',M+(W-2*M)*0.66,y+160);y+=200;
+  const out=[];for(const cv of pags){const b=await new Promise(ok=>cv.toBlob(ok,'image/jpeg',0.9));out.push({jpg:new Uint8Array(await b.arrayBuffer()),w:cv.width,h:cv.height})}
+  return new File([fotoPdf(out)],nomeSeguro(`Proposta NTN - ${p.candNome} - ${p.funcao} - v${p.versao}`)+'.pdf',{type:'application/pdf'})}
+async function propBaixar(p){try{const f=await propPdf(p);
+    if(matchMedia('(pointer: coarse)').matches&&navigator.canShare&&navigator.canShare({files:[f]})){try{await navigator.share({files:[f],title:f.name});return}catch(e){if(e&&e.name==='AbortError')return}}
+    const a=document.createElement('a');a.href=URL.createObjectURL(f);a.download=f.name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1000)}
+  catch(e){console.error('v18 pdf',e);toast('Não foi possível gerar o PDF. Tente de novo.',true)}}
+
+/* ---------- envio, resposta ---------- */
+Object.assign(ACT,{
+  propMontar:b=>{const x=CAND(b.dataset.id);if(x)propMontar(x)},
+  propPdf:b=>{const p=PROP(b.dataset.p);if(!p)return toast('Proposta não encontrada.',true);toast('Gerando o PDF…');propBaixar(p)},
+  propEnviada:b=>{const p=PROP(b.dataset.p);const x=p&&CAND(p.candId);if(!p||!x||!(p.status==='Rascunho'||propSit(p)==='Vencida sem resposta'))return;const val=propCfg().validade;
+    modal('Registrar envio da proposta',`${fld('Data do envio','data',hoje,'date')}${fld('Enviada por','como','WhatsApp','',['WhatsApp','E-mail','Pessoalmente','Outro'])}<p class="note full" style="margin:0">A proposta fica válida por ${val} dias a partir do envio. Sem resposta até lá, aparece um alerta.</p>`,'Registrar envio',fd=>{
+      if(!fd.data||fd.data>hoje)return toast('Informe uma data até hoje.',true),false;if(!(p.status==='Rascunho'||propSit(p)==='Vencida sem resposta'))return toast('A proposta mudou enquanto a tela estava aberta. Atualize.',true),false;p.status='Enviada';p.enviada=fd.data;p.validade=addD(fd.data,val);p.enviadaPor=fd.como;
+      p.hist.push({data:hoje,autor:perfilNome(),texto:`Enviada por ${fd.como.toLowerCase()} em ${fmtE(fd.data)}; válida até ${fmtE(p.validade)}.`});x.hist.push({data:hoje,autor:perfilNome(),texto:`Proposta enviada (${fd.como.toLowerCase()}), válida até ${fmtE(p.validade)}.`});
+      propEspelho(x,p);save();closeModal();render();setTimeout(()=>abrirCand(x.id),0);return false})},
+  propResposta:b=>{const p=PROP(b.dataset.p);const x=p&&CAND(p.candId);if(!p||!x||p.status!=='Enviada')return;if(propSit(p)==='Vencida sem resposta')return toast('A proposta venceu. Registre um novo envio (nova validade) ou monte uma nova versão.',true);
+    const u={camisa:'',calca:'',botina:''};
+    modal(`Resposta de ${esc(x.nome)}`,`<div class="field full"><label for="pr-rt">Resposta</label><select class="inp" id="pr-rt" name="tipo" data-prop-resp="1"><option>Aceita</option><option>Recusada</option></select></div>
+      ${fld('Data da resposta','data',hoje,'date')}${fld('Como chegou','como','WhatsApp','',['WhatsApp','E-mail','Assinada em papel','Pessoalmente','Telefone'])}
+      <div class="full" data-bloco="Aceita"><div class="sec-t">Tamanhos (para separar uniforme e EPI)</div><div class="form">${fld('Camisa','camisa',u.camisa,'',['','PP','P','M','G','GG','XG','XGG'])}${fld('Calça','calca','','',['','36','38','40','42','44','46','48','50','52','54'])}${fld('Botina','botina','','',['','34','35','36','37','38','39','40','41','42','43','44','45','46','47','48'])}</div>
+        <p class="note" style="margin:8px 0 0">Ao registrar o aceite, o sistema cria a admissão com função, obra, salário, benefícios, cidades, contrato, folga e data de apresentação.</p></div>
+      <div class="full" data-bloco="Recusada" hidden>${fld('Motivo','motivo','Salário','',MOTIVOS_RECUSA)}<div class="field"><label for="pr-ro">Detalhe (opcional)</label><input class="inp" id="pr-ro" name="det" maxlength="200"></div>
+        <label class="full" style="display:flex;gap:8px;align-items:center;margin-top:8px"><input type="checkbox" name="encerrar"> Encerrar a seleção deste candidato</label></div>`,'Registrar resposta',fd=>{
+      if(!fd.data||fd.data>hoje)return toast('Informe uma data até hoje.',true),false;
+      if(p.status!=='Enviada'||propSit(p)!=='Enviada'||x.colabId)return toast('A proposta mudou enquanto a tela estava aberta. Atualize a tela.',true),false;
+      if(fd.tipo==='Aceita'){const err=candAprovar(x);if(err)return toast(err,true),false;const c=C(x.colabId);if(!c)return toast('A admissão não foi criada. Atualize a tela e tente de novo.',true),false;
+        {c.salario=p.salario;c.peric=/Periculosidade/.test(p.adic);c.insal=/Insalubridade/.test(p.adic)?({'Insalubridade 10%':'10% (mínimo)','Insalubridade 20%':'20% (médio)','Insalubridade 40%':'40% (máximo)'})[p.adic]:'Não';
+          c.tipoContrato=p.contrato;c.previsaoInicio=p.apres.data;c.regime=p.regime;c.cidades={origem:p.origem,natal:p.natal};c.propostaId=p.id;
+          c.uniforme={...(c.uniforme||{}),...(fd.camisa?{camisa:fd.camisa}:{}),...(fd.calca?{calca:fd.calca}:{}),...(fd.botina?{botina:fd.botina}:{})};
+          c.beneficios=p.beneficios.filter(b=>benCfg(b.nome)).map(b=>({nome:b.nome,valor:null,obs:'Proposta '+p.num+' v'+p.versao}));
+          if(p.regime==='Alojado')c.folgaV2={modo:'padrao',conf:{},puladas:{}};
+          c.historico.push({data:fd.data,tipo:'Requisição',texto:`Proposta ${p.num} versão ${p.versao} aceita (${fd.como.toLowerCase()}). Apresentação em ${fmtE(p.apres.data)}.`,autor:perfilNome()})}
+        p.status='Aceita';p.resposta={tipo:'Aceita',data:fd.data,como:fd.como,por:perfilNome()};p.colabId=x.colabId}
+      else{const mot=MOTIVOS_RECUSA.includes(fd.motivo)?fd.motivo:'Outro';const det=String(fd.det||'').trim().slice(0,200);
+        p.status='Recusada';p.resposta={tipo:'Recusada',data:fd.data,como:fd.como,motivo:mot+(det?': '+det:''),por:perfilNome()};
+        if(fd.encerrar)candEncerrar(x,'Desistiu','Recusou a proposta',false)}
+      p.hist.push({data:hoje,autor:perfilNome(),texto:`${p.resposta.tipo} em ${fmtE(fd.data)} (${fd.como.toLowerCase()})${p.resposta.motivo?': '+p.resposta.motivo:''}.`});
+      x.hist.push({data:hoje,autor:perfilNome(),texto:`Proposta ${p.resposta.tipo.toLowerCase()}.`});
+      propEspelho(x,p);syncMob('Proposta respondida');save();closeModal();render();toast(p.status==='Aceita'?`${x.nome.split(' ')[0]} aceitou: admissão criada. Complete dados pessoais e documentos.`:'Recusa registrada.');return false});
+    setTimeout(()=>{const f=document.querySelector('#layer .modal form');if(f)f.dataset.rasc=''},0)},
+});
+document.addEventListener('change',e=>{const s=e.target;if(!s.dataset?.propResp)return;const f=s.closest('form');f.querySelectorAll('[data-bloco]').forEach(b=>{b.hidden=b.dataset.bloco!==s.value})});
+Object.assign(ACT_PERM,{propMontar:'fazerProposta',propEnviada:'fazerProposta',propResposta:'fazerProposta',propPdf:'verCustoViagem'});
+
+/* ---------- alertas: proposta enviada sem resposta ---------- */
+const alertasV17p=alertas;
+alertas=function(){const l=alertasV17p();const extra=[];
+  (DB.cands||[]).forEach(x=>{const pr=x.prop;if(!pr||pr.status!=='Enviada'||!pr.validade)return;const r=R(x.reqId);if(!r||!noEscopo(r.obraId)||['Aprovado','Reprovado','Desistiu'].includes(x.etapa))return;
+    const venc=pr.validade<hoje;const a={c:null,req:r,tipo:'Requisição',desc:`${r.num} · proposta para ${x.nome}: ${venc?`venceu em ${fmtE(pr.validade)} sem resposta`:`aguardando resposta até ${fmtE(pr.validade)}`}`,data:pr.validade,resp:pessoasPerfil('rh')[0]};a.d=dias(a.data);a.acao=true;a.vencido=venc;extra.push(a)});
+  return extra.length?l.concat(extra).sort((a,b)=>a.d-b.d):l};
+
+/* ---------- relatório ---------- */
+REL_META.propostas={g:'Pessoal',d:'Propostas de emprego por requisição: situação, salário, distância, ajuda de custo e motivo de recusa.',f:['obra'],p:'verCustoViagem'};
+RELS.propostas={nome:'Propostas de emprego',cols:['Obra','Requisição','Candidato','Função','Versão','Situação','Salário','Origem','Distância (km)','Ajuda por folga','Custo mensal estimado','Motivo da recusa'],
+  rows:()=>!podeVerCusto()?[]:(DB.propostas||[]).filter(p=>!UI.relObra||p.obraId===UI.relObra).map(p=>[nomeObra(p.obraId),p.num,p.candNome,p.funcao,p.versao,propSit(p),brl(p.salario),munTxt(p.origem)||'—',p.km??'—',p.regime==='Alojado'?brl(2*p.valorTrecho):'—',p.custoMensal!=null?brl(p.custoMensal):'—',p.resposta?.motivo||''])};
+
+/* ---------- Configurações › Proposta ---------- */
+function cfgProposta(){const vc=podeVerCusto();const ec=podeEditarCusto();const ed=ec;const dis=ec?'':'disabled';if(!vc)return `<section class="panel" style="grid-column:1/-1"><div class="panel-b"><p class="note" style="margin:0">Só RH, Diretoria e Adm. de obra veem a configuração da proposta.</p></div></section>`;const pc=propCfg();const g=custos();
+  return `<section class="panel" style="grid-column:1/-1"><div class="panel-h"><h3>Textos padrão da proposta</h3><span class="sub">valem para todas as obras; jornada e regras do alojamento podem mudar por obra em Viagens e folgas</span></div>
+    <div class="panel-b form">
+      <div class="field full"><label for="pp-j">Jornada</label><input class="inp" id="pp-j" value="${esc(pc.jornada)}" data-chg="propTxt" data-f="jornada" maxlength="300" ${dis}></div>
+      <div class="field full"><label for="pp-h">Horas extras</label><textarea class="inp" id="pp-h" rows="2" data-chg="propTxt" data-f="he" maxlength="400" ${dis}>${esc(pc.he)}</textarea></div>
+      <div class="field full"><label for="pp-r">Regras do alojamento</label><input class="inp" id="pp-r" value="${esc(pc.regras)}" data-chg="propTxt" data-f="regras" maxlength="300" ${dis}></div>
+      <div class="field"><label for="pp-c">Contato no rodapé</label><input class="inp" id="pp-c" value="${esc(pc.contato)}" data-chg="propTxt" data-f="contato" maxlength="120" ${dis}></div>
+      <div class="field"><label for="pp-v">Validade (dias após o envio)</label><input class="inp num" type="number" min="1" max="30" id="pp-v" value="${esc(pc.validade)}" data-chg="propTxt" data-f="validade" ${dis}></div>
+      <div class="field full"><label for="pp-logo">Logotipo no PDF (PNG ou JPG)</label><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">${custos().logo?`<img src="${esc(custos().logo)}" alt="Logotipo atual" style="max-height:48px;max-width:200px;background:#fff;padding:4px;border-radius:6px">`:'<span class="muted">sem logotipo: o PDF mostra o nome NTN Engenharia</span>'}
+        ${ed?`<input type="file" id="pp-logo" accept="image/png,image/jpeg" data-chg="propLogo">${custos().logo?'<button class="btn small ghost" data-act="propLogoRm">Remover</button>':''}`:''}</div></div>
+    </div></section>
+  ${vc?`<section class="panel" style="grid-column:1/-1"><div class="panel-h"><h3>Salário por função</h3><span class="sub">o mesmo valor em todas as obras</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Função</th><th>Salário-base (R$)</th><th>Adicional</th><th>Total com adicional</th></tr></thead><tbody>
+    ${DB.cfg.funcoes.map(f=>{const s=g.salarios?.[f.id]||{};const sal=+s.sal||0;return `<tr><td>${esc(f.nome)}</td><td>${ec?`<input class="inp num" inputmode="decimal" value="${sal?esc(String(sal).replace('.',',')):''}" placeholder="não cadastrado" data-chg="salFuncao" data-f="${esc(f.id)}" aria-label="Salário de ${esc(f.nome)}" style="max-width:140px">`:sal?brl(sal):'—'}</td>
+      <td>${ec?`<select class="inp" data-chg="salAdic" data-f="${esc(f.id)}" aria-label="Adicional de ${esc(f.nome)}">${ADICIONAIS.map(a=>`<option ${a===(s.adic||'Nenhum')?'selected':''}>${a}</option>`).join('')}</select>`:esc(s.adic||'Nenhum')}</td><td class="num">${sal?brl(sal*(1+adicPct(s.adic))):'—'}</td></tr>`}).join('')}</tbody></table></div>
+    <div class="panel-b facts"><div><span>Encargos sobre a folha, para o custo mensal estimado (%)</span>${ec?`<input class="inp num" inputmode="decimal" value="${g.encargos!=null?esc(String(g.encargos).replace('.',',')):''}" placeholder="informe com a contabilidade" data-chg="custoEnc" aria-label="Encargos em porcentagem" style="max-width:140px">`:`<b>${g.encargos!=null?esc(g.encargos)+'%':'não informado'}</b>`}</div></div>
+    <div class="panel-b"><p class="note" style="margin:0">Sem salário cadastrado, a proposta da função não pode ser montada. Só RH, Diretoria e Adm. de obra veem estes valores; só RH e Diretoria alteram. O custo mensal estimado aparece só para a NTN, nunca no PDF.</p></div></section>`:''}`}
+const vCfgV18v=vCfg;
+vCfg=function(){
+  let h=UI.cfgTab==='proposta'?(()=>{const t=UI.cfgTab;UI.cfgTab='funcoes';try{return vCfgV18v()}finally{UI.cfgTab=t}})():vCfgV18v();
+  h=h.replace(/(<button data-act="cfgTab" data-v="admissao")/,`<button data-act="cfgTab" data-v="proposta" aria-pressed="${UI.cfgTab==='proposta'}">Proposta</button>$1`);
+  if(UI.cfgTab==='proposta'){h=h.replace(/aria-pressed="true"/g,'aria-pressed="false"').replace('data-v="proposta" aria-pressed="false"','data-v="proposta" aria-pressed="true"');const i=h.indexOf('<div class="cfg-grid">');if(i>=0)h=h.slice(0,i)+`<div class="cfg-grid">${cfgProposta()}</div>`}
+  return h};
+Object.assign(CHG,{
+  propTxt:el=>{const k=el.dataset.f;if(!['jornada','he','regras','contato','validade'].includes(k))return;if(!podeEditarCusto())return;const p=custosMaterializar().prop??={};
+    if(k==='validade'){const v=Math.round(+el.value);if(!(v>=1&&v<=30))return toast('Validade: de 1 a 30 dias.',true),render();p.validade=v}
+    else{const v=el.value.trim().slice(0,400);if(!v)return toast('O texto não pode ficar vazio.',true),render();p[k]=v}save();render()},
+  salFuncao:el=>{if(!podeEditarCusto())return;const fid=el.dataset.f;if(!F(fid))return;const g=custosMaterializar();const t=el.value.trim();
+    if(!t){if(g.salarios[fid]){g.salarios[fid].sal=null}save();render();return}const v=numBR(t);if(!(v>=500&&v<1e6))return toast('Informe um salário válido (ex.: 3.981,57).',true),render();(g.salarios[fid]??={}).sal=Math.round(v*100)/100;save();render()},
+  salAdic:el=>{if(!podeEditarCusto())return;const fid=el.dataset.f;if(!F(fid)||!ADICIONAIS.includes(el.value))return;const g=custosMaterializar();(g.salarios[fid]??={}).adic=el.value;save();render()},
+  custoEnc:el=>{if(!podeEditarCusto())return;const g=custosMaterializar();const t=el.value.trim();if(!t){delete g.encargos;save();render();return}const v=numBR(t);if(!(v>=0&&v<=200))return toast('Encargos: de 0 a 200%.',true),render();g.encargos=Math.round(v*100)/100;save();render()},
+  propLogo:el=>{const f=el.files&&el.files[0];if(!f)return;if(!/^image\/(png|jpeg)$/.test(f.type))return toast('Use um arquivo PNG ou JPG.',true);if(f.size>5*1024*1024)return toast('Imagem muito grande (máximo 5 MB).',true);
+    const url=URL.createObjectURL(f);const i=new Image();i.onload=()=>{URL.revokeObjectURL(url);const k=Math.min(1,600/i.width,240/i.height);const cv=document.createElement('canvas');cv.width=Math.max(1,Math.round(i.width*k));cv.height=Math.max(1,Math.round(i.height*k));
+      const cx=cv.getContext('2d');if(f.type==='image/jpeg'){cx.fillStyle='#fff';cx.fillRect(0,0,cv.width,cv.height)}cx.drawImage(i,0,0,cv.width,cv.height);
+      let d=cv.toDataURL('image/png');if(d.length>180000)d=cv.toDataURL('image/jpeg',0.88);if(d.length>180000)return toast('Logotipo muito detalhado. Use uma imagem menor.',true);
+      custosMaterializar().logo=d;save();render();toast('Logotipo salvo.')};i.onerror=()=>{URL.revokeObjectURL(url);toast('Não foi possível ler a imagem.',true)};i.src=url},
+});
+Object.assign(ACT,{propLogoRm:()=>{if(!podeEditarCusto())return;delete custosMaterializar().logo;save();render()}});
+Object.assign(CHG_PERM,{propTxt:'editarCustoViagem',propLogo:'editarCustoViagem',salFuncao:'editarCustoViagem',salAdic:'editarCustoViagem',custoEnc:'editarCustoViagem'});
+Object.assign(ACT_PERM,{propLogoRm:'editarCustoViagem'});
+
 rascSalvar=(function(prev){return function(f){if(f&&f.querySelector&&f.querySelector('input[type="password"]'))return;return prev.apply(this,arguments)}})(rascSalvar);
 render();</script>
 <script src="/vendor/supabase-2.117.2.js"></script>
