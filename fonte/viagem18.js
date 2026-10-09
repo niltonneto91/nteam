@@ -26,7 +26,7 @@ const podeVerCusto=()=>pode('verCustoViagem')&&PERFIS_CUSTO.includes(UI.perfil);
 const podeEditarCusto=()=>pode('editarCustoViagem')&&['rh','dir'].includes(UI.perfil);
 
 /* ---------- registro restrito 'custos' e campos pessoais novos ---------- */
-const CUSTO_PAD={v:1,fator:1.3,faixas:[{ate:300,valor:120},{ate:700,valor:230},{ate:1200,valor:380},{ate:null,valor:900}],salarios:{}};
+const CUSTO_PAD={v:1,fator:1.3,faixas:[{ate:300,valor:120},{ate:700,valor:230},{ate:1200,valor:380},{ate:null,valor:1000}],salarios:{},tetoAjuda:2000};
 function custos(){return DB.custos||CUSTO_PAD}
 function custosMaterializar(){if(!DB.custos)DB.custos=JSON.parse(JSON.stringify(CUSTO_PAD));DB.custos.salarios??={};DB.custos.faixas.sort((a,b)=>(a.ate==null?1e9:+a.ate)-(b.ate==null?1e9:+b.ate));return DB.custos}
 ['cidades','ajudas'].forEach(k=>{if(!PESSOAL_CAMPOS.includes(k))PESSOAL_CAMPOS.push(k);if(!PESSOAL_SO.includes(k))PESSOAL_SO.push(k)});
@@ -301,7 +301,7 @@ function cfgViagem(){const ed=pode('configurar');const dis=ed?'':'disabled';cons
     <div class="tbl-wrap"><table><thead><tr><th>Obra</th><th>Cidade (lista do IBGE)</th><th>Jornada, se diferente do padrão</th><th>Regras do alojamento, se diferentes</th></tr></thead><tbody>${obras||'<tr><td colspan="4" class="empty">Nenhuma obra cadastrada.</td></tr>'}</tbody></table></div>
     <div class="panel-b"><p class="note" style="margin:0">A viagem termina sempre na cidade da obra. Jornada e regras em branco usam o padrão da empresa (Configurações › Proposta). Só RH e Diretoria alteram.</p></div></section>`:''}
   ${vc?`<section class="panel" style="grid-column:1/-1"><div class="panel-h"><h3>Ajuda de custo por faixa de distância</h3><span class="sub">${DB.custos?`valores da NTN`:'valores sugeridos; ainda não salvos'}</span></div>
-    <div class="panel-b facts"><div><span>Fator de correção sobre a linha reta</span>${ec?`<input class="inp num" inputmode="decimal" value="${esc(String(g.fator).replace('.',','))}" data-chg="custoFator" aria-label="Fator de correção" style="max-width:100px">`:`<b>${esc(String(g.fator).replace('.',','))}</b>`}</div></div>
+    <div class="panel-b facts"><div><span>Ajuda por folga acima de (R$) precisa de aprovação da Diretoria</span>${ec?`<input class="inp num" inputmode="decimal" value="${esc(String(tetoAjuda()).replace('.',','))}" data-chg="custoTeto" aria-label="Teto de ajuda por folga" style="max-width:120px">`:`<b>${brl(tetoAjuda())}</b>`}</div><div><span>Fator de correção sobre a linha reta</span>${ec?`<input class="inp num" inputmode="decimal" value="${esc(String(g.fator).replace('.',','))}" data-chg="custoFator" aria-label="Fator de correção" style="max-width:100px">`:`<b>${esc(String(g.fator).replace('.',','))}</b>`}</div></div>
     <div class="tbl-wrap"><table><thead><tr><th>Faixa</th><th>Até (km)</th><th>Valor por trecho (R$)</th><th>Por folga, ida e volta</th></tr></thead><tbody>
     ${fx.map((x,i)=>`<tr><td>${esc(faixaRot(i))}</td><td>${x.ate==null?'—':ec?`<input class="inp num" type="number" min="1" value="${esc(x.ate)}" data-chg="custoFaixa" data-i="${i}" data-f="ate" aria-label="Limite da faixa ${i+1}" style="max-width:110px">`:esc(x.ate)}</td>
       <td>${ec?`<input class="inp num" inputmode="decimal" value="${esc(String(x.valor).replace('.',','))}" data-chg="custoFaixa" data-i="${i}" data-f="valor" aria-label="Valor por trecho da faixa ${i+1}" style="max-width:120px">`:brl(x.valor)}</td><td class="num">${brl(2*(+x.valor||0))}</td></tr>`).join('')}</tbody></table></div>
@@ -313,6 +313,7 @@ vCfg=function(){
   h=h.replace(/(<button data-act="cfgTab" data-v="admissao")/,`<button data-act="cfgTab" data-v="viagem" aria-pressed="${UI.cfgTab==='viagem'}">Viagens e folgas</button>$1`);
   if(UI.cfgTab==='viagem'){h=h.replace(/aria-pressed="true"/g,'aria-pressed="false"').replace('data-v="viagem" aria-pressed="false"','data-v="viagem" aria-pressed="true"');const i=h.indexOf('<div class="cfg-grid">');if(i>=0)h=h.slice(0,i)+`<div class="cfg-grid">${cfgViagem()}</div>`}
   return h};
+const tetoAjuda=()=>{const v=+custos().tetoAjuda;return v>0?v:2000};
 const numBR=s=>{const t=String(s??'').trim().replace(/\s|R\$/g,'');if(!t)return NaN;if(/,/.test(t))return +t.replace(/\./g,'').replace(',','.');if(/^\d{1,3}(\.\d{3})+$/.test(t))return +t.replace(/\./g,'');return +t};
 Object.assign(CHG,{
   obraMun:el=>{if(!podeEditarCusto())return;const o=DB.cfg.obras[+el.dataset.i];if(!o)return;if(!el.value.trim()){if(obraCfg(o.id).mun){delete obraCfgMat(o.id).mun;save()}render();return}
@@ -322,6 +323,7 @@ Object.assign(CHG,{
     if(f==='ciclo'&&!(v>=7&&v<=365))return toast('Informe de 7 a 365 dias.',true),render();if(f==='dias'&&!(v>=1&&v<=10))return toast('Informe de 1 a 10 dias úteis.',true),render();
     const p=DB.cfg.folgaPadrao??=JSON.parse(JSON.stringify(folgaPad()));p[k]??={};p[k][f]=v;save();render()},
   funcGrupo:el=>{const f=DB.cfg.funcoes[+el.dataset.i];if(!f||!['direta','indireta'].includes(el.value))return;f.grupo=el.value;save();render()},
+  custoTeto:el=>{if(!podeEditarCusto())return;const v=numBR(el.value);if(!(v>0&&v<1e6))return toast('Informe um valor válido.',true),render();custosMaterializar().tetoAjuda=Math.round(v*100)/100;save();render()},
   custoFator:el=>{if(!podeEditarCusto())return;const v=numBR(el.value);if(!(v>=1&&v<=3))return toast('Fator: informe um número entre 1 e 3 (ex.: 1,30).',true),render();custosMaterializar().fator=Math.round(v*100)/100;save();render()},
   custoFaixa:el=>{if(!podeEditarCusto())return;const g=custosMaterializar();const l=g.faixas;const real=l[+el.dataset.i];if(!real)return render();
     if(el.dataset.f==='valor'){const v=numBR(el.value);if(!(v>=0&&v<100000))return toast('Informe um valor válido.',true),render();real.valor=Math.round(v*100)/100}
@@ -329,7 +331,7 @@ Object.assign(CHG,{
     save();render()},
 });
 Object.assign(ACT,{obraMunSug:b=>{if(!podeEditarCusto())return;const o=DB.cfg.obras[+b.dataset.i];const m=MUN.lista&&MUN.lista.find(x=>x.cod===+b.dataset.cod);if(!o||!m)return;obraCfgMat(o.id).mun=munRef(m);save();render();toast(`Cidade da obra: ${munTxt(m)}.`)}});
-Object.assign(CHG_PERM,{obraMun:'editarCustoViagem',obraTxt:'editarCustoViagem',folgaPadCfg:'configurar',funcGrupo:'configurar',custoFator:'editarCustoViagem',custoFaixa:'editarCustoViagem'});
+Object.assign(CHG_PERM,{obraMun:'editarCustoViagem',obraTxt:'editarCustoViagem',folgaPadCfg:'configurar',funcGrupo:'configurar',custoFator:'editarCustoViagem',custoTeto:'editarCustoViagem',custoFaixa:'editarCustoViagem'});
 Object.assign(ACT_PERM,{obraMunSug:'editarCustoViagem'});
 
 /* ---------- função Supervisor (mão de obra indireta), criada uma vez pelo RH ou Diretoria ---------- */

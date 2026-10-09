@@ -10,7 +10,11 @@
    Valores ficam no registro 'proposta' (servidor: RH e Diretoria; Adm. da obra só lê).
    O candidato guarda só a situação da proposta, sem valores.
    ===================================================================== */
-PERM_DEF.push(['fazerProposta','Montar, enviar e registrar propostas de emprego','Editar',['rh']]);
+PERM_DEF.push(['fazerProposta','Montar, enviar e registrar propostas de emprego','Editar',['rh']],['aprovarPropostaDir','Aprovar proposta com ajuda de custo acima do teto','Aprovar',['dir']]);
+V18_PERM.aprovarPropostaDir=['dir'];
+/* ajuda por folga acima do teto (Configurações › Viagens e folgas) precisa da Diretoria antes do envio */
+const propPrecisaDir=p=>p.regime==='Alojado'&&2*(+p.valorTrecho||0)>tetoAjuda();
+const propAguardaDir=p=>p&&p.status==='Rascunho'&&p.precisaDir&&!p.aprovDir;
 TIPO_COL.propostas='proposta';
 const PROP_PAD={jornada:'Segunda a quinta, das 7h às 17h; sexta, das 7h às 16h.',he:'Podem ocorrer trabalhos aos sábados, domingos e feriados, com horas extras: 60% aos sábados e nas horas além da jornada; 100% aos domingos e feriados.',
   regras:'No alojamento é proibido bebida alcoólica, entrada de terceiros e som alto.',contato:'rh@ntnengenharia.com.br',validade:3};
@@ -53,10 +57,13 @@ function propQuadro(x){const r=R(x.reqId);if(!r)return '';const ps=propsCand(x);
     ${vc&&ult?`<div><span>Salário</span><b class="num">${brl(ult.salario)}${ult.adicValor?` + ${esc(ult.adic.toLowerCase())}`:''}</b></div><div><span>Origem</span><b>${esc(munTxt(ult.origem))}</b><small class="muted" style="display:block">${ult.km!=null?ult.km.toLocaleString('pt-BR')+' km · '+esc(ult.faixa):''}</small></div><div><span>Ajuda por folga</span><b class="num">${ult.regime==='Alojado'?brl(2*ult.valorTrecho):'—'}</b></div><div><span>Custo mensal estimado</span><b class="num">${ult.custoMensal!=null?brl(ult.custoMensal):'—'}</b><small class="muted" style="display:block">${ult.encargos?`com ${ult.encargos}% de encargos`:'sem encargos (informe em Configurações › Proposta)'}</small></div>`:''}
     ${ult?.resposta?`<div><span>Resposta</span><b>${esc(ult.resposta.tipo)} em ${fmtE(ult.resposta.data)}</b><small class="muted" style="display:block">${esc(ult.resposta.como||'')}${ult.resposta.motivo?' · '+esc(ult.resposta.motivo):''}</small></div>`:''}</div>`;
   const falt=propFaltas(r);
+  const aguarda=ult?propAguardaDir(ult):!!x.prop?.aguardaDir;
+  if(aguarda)h+=`<div class="banner" style="margin:0 0 8px">${vc&&ult?`Ajuda por folga de ${brl(2*ult.valorTrecho)}, acima do teto de ${brl(tetoAjuda())}.`:'Ajuda de custo acima do teto.'} A Diretoria precisa aprovar antes do envio.${ult&&pode('aprovarPropostaDir')&&podeEditarCusto()?` <button type="button" class="btn small primary" data-act="propAprovDir" data-p="${esc(ult.id)}">Aprovar proposta</button>`:''}</div>`;
+  if(ult?.aprovDir)h+=`<p class="muted" style="margin:0 0 8px">Aprovada pela Diretoria: ${esc(ult.aprovDir.por)} em ${fmtE(ult.aprovDir.em)}.</p>`;
   if(ed){const bts=[];
     if(!ult||['Recusada','Substituída'].includes(ult.status)||propSit(ult)==='Vencida sem resposta')bts.push(`<button type="button" class="btn primary" data-act="propMontar" data-id="${id}" ${falt.length?'disabled':''}>${ult?'Montar nova versão':'Montar proposta'}</button>`);
     if(ult&&['Rascunho','Enviada'].includes(ult.status)){bts.push(`<button type="button" class="btn ${ult.status==='Rascunho'?'primary':''}" data-act="propPdf" data-p="${esc(ult.id)}">Baixar PDF</button>`);
-      if(ult.status==='Rascunho')bts.push(`<button type="button" class="btn" data-act="propEnviada" data-p="${esc(ult.id)}">Registrar envio</button>`,`<button type="button" class="btn ghost" data-act="propMontar" data-id="${id}">Refazer</button>`);
+      if(ult.status==='Rascunho')bts.push(propAguardaDir(ult)?'':`<button type="button" class="btn" data-act="propEnviada" data-p="${esc(ult.id)}">Registrar envio</button>`,`<button type="button" class="btn ghost" data-act="propMontar" data-id="${id}">Refazer</button>`);
       else bts.push(propSit(ult)==='Vencida sem resposta'?`<button type="button" class="btn primary" data-act="propEnviada" data-p="${esc(ult.id)}">Registrar novo envio</button>`:`<button type="button" class="btn primary" data-act="propResposta" data-p="${esc(ult.id)}">Registrar resposta</button>`,`<button type="button" class="btn ghost" data-act="propMontar" data-id="${id}">Nova versão</button>`)}
     else if(ult&&vc)bts.push(`<button type="button" class="btn ghost" data-act="propPdf" data-p="${esc(ult.id)}">Baixar PDF</button>`);
     h+=`<div class="actions" style="gap:8px;flex-wrap:wrap">${bts.join('')}</div>${falt.length&&(!ult||ult.status!=='Enviada')?`<p class="note" style="margin:8px 0 0">Para montar a proposta, falta cadastrar: ${falt.map(esc).join('; ')}.</p>`:''}`}
@@ -104,14 +111,14 @@ function propMontar(x){const r=R(x.reqId);if(!r)return toast('Requisição não 
     modal(`Proposta · ${esc(x.nome)} · ${esc(F(r.funcaoId)?.nome||'')}`,propForm(x,r,ant),'Salvar proposta',fd=>{
       const f=document.querySelector('#layer .modal form');const d=propLer(f,r);const err=propErros(d);if(err.length){propPreviaHtml();toast(err[0],true);return false}
       const calc=propCalcular(r,d);DB.propostas??=[];
-      if(ant&&ant.status==='Rascunho'){Object.assign(ant,calc,{alterada:hoje});(ant.hist??=[]).push({data:hoje,autor:perfilNome(),texto:'Rascunho refeito.'});propEspelho(x,ant)}
+      if(ant&&ant.status==='Rascunho'){Object.assign(ant,calc,{alterada:hoje,precisaDir:propPrecisaDir(calc),aprovDir:null});(ant.hist??=[]).push({data:hoje,autor:perfilNome(),texto:'Rascunho refeito.'});propEspelho(x,ant)}
       else{if(ant&&['Enviada'].includes(ant.status)){ant.status='Substituída';ant.hist.push({data:hoje,autor:perfilNome(),texto:'Substituída por nova versão.'})}
-        const p={id:uid(),reqId:r.id,candId:x.id,candNome:x.nome,num:r.num,versao:(ant?.versao||0)+1,status:'Rascunho',criada:hoje,por:perfilNome(),...calc,hist:[{data:hoje,autor:perfilNome(),texto:'Proposta montada.'}]};
+        const p={id:uid(),reqId:r.id,candId:x.id,candNome:x.nome,num:r.num,versao:(ant?.versao||0)+1,status:'Rascunho',criada:hoje,por:perfilNome(),...calc,precisaDir:propPrecisaDir(calc),aprovDir:null,hist:[{data:hoje,autor:perfilNome(),texto:'Proposta montada.'}]};
         DB.propostas.push(p);propEspelho(x,p)}
       x.hist.push({data:hoje,autor:perfilNome(),texto:`Proposta ${ant&&ant.status!=='Rascunho'?'(nova versão) ':''}montada.`});
       save();closeModal();render();setTimeout(()=>abrirCand(x.id),0);toast('Proposta salva. Baixe o PDF e envie ao candidato.');return false},true);
     const f=document.querySelector('#layer .modal form');if(f){f.dataset.propCand=x.id;f.dataset.rasc=''}setTimeout(propPreviaHtml,0)}).catch(()=>toast(MUN.erro,true))}
-function propEspelho(x,p){x.prop={id:p.id,versao:p.versao,status:p.status,enviada:p.enviada||'',validade:p.validade||'',resposta:p.resposta?{tipo:p.resposta.tipo,data:p.resposta.data}:null}}
+function propEspelho(x,p){x.prop={id:p.id,versao:p.versao,status:p.status,aguardaDir:!!propAguardaDir(p),enviada:p.enviada||'',validade:p.validade||'',resposta:p.resposta?{tipo:p.resposta.tipo,data:p.resposta.data}:null}}
 
 /* ---------- PDF (desenhado em tela, A4 a 200 ppp) ---------- */
 function propImg(src){return new Promise(ok=>{if(!src)return ok(null);const i=new Image();i.onload=()=>ok(i);i.onerror=()=>ok(null);i.src=src})}
@@ -163,9 +170,14 @@ async function propBaixar(p){try{const f=await propPdf(p);
 
 /* ---------- envio, resposta ---------- */
 Object.assign(ACT,{
+  propAprovDir:b=>{const p=PROP(b.dataset.p);const x=p&&CAND(p.candId);if(!p||!x||!propAguardaDir(p)||!podeEditarCusto())return;
+    modal('Aprovar proposta (Diretoria)',`<p class="full" style="margin:0">${esc(p.candNome)} · ${esc(p.funcao)} · ${esc(p.obra)}. Ajuda por folga de ${brl(2*p.valorTrecho)} (${esc(munTxt(p.origem))}, ${esc(String(p.km))} km), acima do teto de ${brl(tetoAjuda())}.</p><div class="field full"><label for="pr-ad">Observação (opcional)</label><input class="inp" id="pr-ad" name="obs" maxlength="200"></div>`,'Aprovar proposta',fd=>{
+      if(!propAguardaDir(p))return toast('A proposta mudou. Atualize a tela.',true),false;p.aprovDir={por:perfilNome(),em:hoje,obs:String(fd.obs||'').slice(0,200)};
+      p.hist.push({data:hoje,autor:perfilNome(),texto:'Aprovada pela Diretoria (ajuda de custo acima do teto).'+(p.aprovDir.obs?' '+p.aprovDir.obs:'')});x.hist.push({data:hoje,autor:perfilNome(),texto:'Proposta aprovada pela Diretoria.'});
+      propEspelho(x,p);save();closeModal();render();setTimeout(()=>abrirCand(x.id),0);toast('Proposta aprovada. O RH já pode enviar.');return false})},
   propMontar:b=>{const x=CAND(b.dataset.id);if(x)propMontar(x)},
   propPdf:b=>{const p=PROP(b.dataset.p);if(!p)return toast('Proposta não encontrada.',true);toast('Gerando o PDF…');propBaixar(p)},
-  propEnviada:b=>{const p=PROP(b.dataset.p);const x=p&&CAND(p.candId);if(!p||!x||!(p.status==='Rascunho'||propSit(p)==='Vencida sem resposta'))return;const val=propCfg().validade;
+  propEnviada:b=>{const p=PROP(b.dataset.p);const x=p&&CAND(p.candId);if(!p||!x||!(p.status==='Rascunho'||propSit(p)==='Vencida sem resposta'))return;if(propAguardaDir(p))return toast('A ajuda de custo passa do teto: a Diretoria precisa aprovar antes do envio.',true);const val=propCfg().validade;
     modal('Registrar envio da proposta',`${fld('Data do envio','data',hoje,'date')}${fld('Enviada por','como','WhatsApp','',['WhatsApp','E-mail','Pessoalmente','Outro'])}<p class="note full" style="margin:0">A proposta fica válida por ${val} dias a partir do envio. Sem resposta até lá, aparece um alerta.</p>`,'Registrar envio',fd=>{
       if(!fd.data||fd.data>hoje)return toast('Informe uma data até hoje.',true),false;if(!(p.status==='Rascunho'||propSit(p)==='Vencida sem resposta'))return toast('A proposta mudou enquanto a tela estava aberta. Atualize.',true),false;p.status='Enviada';p.enviada=fd.data;p.validade=addD(fd.data,val);p.enviadaPor=fd.como;
       p.hist.push({data:hoje,autor:perfilNome(),texto:`Enviada por ${fd.como.toLowerCase()} em ${fmtE(fd.data)}; válida até ${fmtE(p.validade)}.`});x.hist.push({data:hoje,autor:perfilNome(),texto:`Proposta enviada (${fd.como.toLowerCase()}), válida até ${fmtE(p.validade)}.`});
@@ -197,12 +209,13 @@ Object.assign(ACT,{
     setTimeout(()=>{const f=document.querySelector('#layer .modal form');if(f)f.dataset.rasc=''},0)},
 });
 document.addEventListener('change',e=>{const s=e.target;if(!s.dataset?.propResp)return;const f=s.closest('form');f.querySelectorAll('[data-bloco]').forEach(b=>{b.hidden=b.dataset.bloco!==s.value})});
-Object.assign(ACT_PERM,{propMontar:'fazerProposta',propEnviada:'fazerProposta',propResposta:'fazerProposta',propPdf:'verCustoViagem'});
+Object.assign(ACT_PERM,{propAprovDir:'aprovarPropostaDir',propMontar:'fazerProposta',propEnviada:'fazerProposta',propResposta:'fazerProposta',propPdf:'verCustoViagem'});
 
 /* ---------- alertas: proposta enviada sem resposta ---------- */
 const alertasV17p=alertas;
 alertas=function(){const l=alertasV17p();const extra=[];
-  (DB.cands||[]).forEach(x=>{const pr=x.prop;if(!pr||pr.status!=='Enviada'||!pr.validade)return;const r=R(x.reqId);if(!r||!noEscopo(r.obraId)||['Aprovado','Reprovado','Desistiu'].includes(x.etapa))return;
+  (DB.cands||[]).forEach(x=>{const pr=x.prop;const r0=pr&&R(x.reqId);if(pr&&pr.aguardaDir&&pr.status==='Rascunho'&&r0&&noEscopo(r0.obraId)){const a={c:null,req:r0,tipo:'Requisição',desc:`${r0.num} · proposta para ${x.nome}: aguarda aprovação da Diretoria (ajuda de custo acima do teto)`,data:hoje,resp:pessoasPerfil('dir')[0]};a.d=0;a.acao=true;a.vencido=false;extra.push(a)}
+    if(!pr||pr.status!=='Enviada'||!pr.validade)return;const r=R(x.reqId);if(!r||!noEscopo(r.obraId)||['Aprovado','Reprovado','Desistiu'].includes(x.etapa))return;
     const venc=pr.validade<hoje;const a={c:null,req:r,tipo:'Requisição',desc:`${r.num} · proposta para ${x.nome}: ${venc?`venceu em ${fmtE(pr.validade)} sem resposta`:`aguardando resposta até ${fmtE(pr.validade)}`}`,data:pr.validade,resp:pessoasPerfil('rh')[0]};a.d=dias(a.data);a.acao=true;a.vencido=venc;extra.push(a)});
   return extra.length?l.concat(extra).sort((a,b)=>a.d-b.d):l};
 
