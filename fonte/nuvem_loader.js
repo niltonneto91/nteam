@@ -94,8 +94,8 @@ function telaLogin(msg=''){
     iniciar()});
 }
 
-function telaNovaSenha(){
-  tela(`<form id="f-senha" novalidate><h2>Crie sua senha</h2><p class="info" style="margin:0 0 6px">Você entrou com uma senha temporária. Escolha uma senha pessoal, com pelo menos 10 caracteres.</p>
+function telaNovaSenha(recup=false){
+  tela(`<form id="f-senha" novalidate><h2>${recup?'Redefina sua senha':'Crie sua senha'}</h2><p class="info" style="margin:0 0 6px">${recup?'Você abriu o link de redefinição enviado ao seu e-mail. Escolha uma nova senha, com pelo menos 10 caracteres.':'Você entrou com uma senha temporária. Escolha uma senha pessoal, com pelo menos 10 caracteres.'}</p>
   <label>Nova senha<input name="s1" type="password" autocomplete="new-password" minlength="10" required autofocus></label>
   <label>Repita a nova senha<input name="s2" type="password" autocomplete="new-password" minlength="10" required></label>
   <div class="msg" role="alert"></div><button type="submit">Salvar senha e entrar</button></form>`);
@@ -105,9 +105,11 @@ function telaNovaSenha(){
     b.disabled=true;b.textContent='Salvando…';
     const {error}=await sb.auth.updateUser({password:f.s1.value});
     const mesma=error&&/same|different/i.test(error.message);
+    if(recup&&mesma){b.disabled=false;b.textContent='Salvar senha e entrar';m.textContent='Use uma senha diferente da atual.';return}
     if(error&&!mesma){b.disabled=false;b.textContent='Salvar senha e entrar';m.textContent=/weak|short/i.test(error.message)?'Senha fraca. Use mais caracteres, misturando letras e números.':'Não foi possível salvar a senha. Tente de novo.';return}
     /* mesmo se a senha já tinha sido gravada numa tentativa anterior, conclui a liberação */
     const {error:e2}=await sb.rpc('senha_trocada');
+    if(recup){iniciar();return}
     if(e2){b.disabled=false;b.textContent='Salvar senha e entrar';
       m.textContent=/senha_nao_trocada/.test(e2.message)?'Use uma senha diferente da temporária.':'A senha foi salva, mas não foi possível liberar o acesso. Tente de novo; se continuar, avise o RH.';
       console.error(JSON.stringify({nivel:'erro',etapa:'senha_trocada',msg:e2.message}));return}
@@ -120,8 +122,19 @@ function telaErro(titulo,texto,sair=true){
 }
 
 /* ---------- início ---------- */
+/* link de redefinição de senha enviado por e-mail (Supabase Auth): tokens no fragmento da URL */
+async function linkRedefinicao(){
+  if(NUVEM._recOk)return null;NUVEM._recOk=true;
+  const h=new URLSearchParams(location.hash.slice(1));if(h.get('type')!=='recovery'&&!h.get('error_code'))return null;
+  const at=h.get('access_token'),rt=h.get('refresh_token');history.replaceState(null,'',location.pathname+location.search);
+  const exp='O link de redefinição expirou ou já foi usado. Peça um novo ao RH ou à Diretoria.';
+  if(h.get('type')!=='recovery'||!at||!rt){telaLogin(exp);return true}
+  const {error}=await sb.auth.setSession({access_token:at,refresh_token:rt});
+  if(error){telaLogin(exp);return true}
+  telaNovaSenha(true);return true}
 async function iniciar(){
   tela('<p class="info">Carregando…</p>');
+  if(await linkRedefinicao())return;
   const {data:{session}}=await sb.auth.getSession();
   if(!session)return telaLogin();
   const {data:p,error:ep}=await sb.from('perfis').select('user_id,nome,email,perfil,obras,pessoa_id,ativo,trocar_senha,admin_total').eq('user_id',session.user.id).maybeSingle();
