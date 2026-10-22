@@ -197,6 +197,7 @@ function sessao(c){const exp=Math.floor(Date.now()/1000)+86400;return {access_to
 /* tudo que iria ao Supabase é atendido aqui; o resto segue normal (mesma origem) */
 window.fetch=function(input,init){const url=input instanceof Request?input.url:String(input);
   if(url.startsWith(HOST))return servidor(input,init).catch(e=>{console.error('demo',e);return json(500,{message:'erro na demonstração'})});
+  if(/vendor\/municipios-ibge\.json$/.test(url.split('?')[0])&&window.NTEAM_DEMO_MUN)return Promise.resolve(json(200,window.NTEAM_DEMO_MUN));
   if(/^https?:\/\//i.test(url)&&!url.startsWith(location.origin))return Promise.reject(new TypeError('Bloqueado na demonstração: '+url));
   return fetchReal(input,init)};
 /* atualização em tempo real: não existe servidor, então a conexão fica parada (só há um navegador) */
@@ -253,12 +254,12 @@ function escolher(){
     el.remove();carregarApp()});
   el.querySelector('button')?.focus()}
 function carregarScript(src){return new Promise((ok,er)=>{const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=er;document.body.appendChild(s)})}
-async function carregarApp(){await carregarScript('/vendor/supabase-2.117.2.js');await carregarScript('/nuvem.js')}
+async function carregarApp(){await carregarScript('vendor/supabase-2.117.2.js');await carregarScript('nuvem.js')}
 
 async function iniciar(){
   faixa();
   try{await IDB.abrir();S=await IDB.ler('estado')}catch(e){S=null}
-  if(!S||!S.reg){const r=await fetchReal('/demo-semente.json',{cache:'no-store'});S=await r.json();S.obj=S.obj||{};S.arq=S.arq||[];S.pac=S.pac||[];S.aud=S.aud||[];await IDB.gravar('estado',S)}
+  if(!S||!S.reg){S=window.NTEAM_DEMO_SEMENTE?copia(window.NTEAM_DEMO_SEMENTE):await (await fetchReal('demo-semente.json',{cache:'no-store'})).json();S.obj=S.obj||{};S.arq=S.arq||[];S.pac=S.pac||[];S.aud=S.aud||[];await IDB.gravar('estado',S)}
   let ses=null;try{ses=JSON.parse(localStorage.getItem(SESS)||'null')}catch(e){}
   const uidSes=ses&&uidDoToken('Bearer '+ses.access_token);
   if(uidSes&&conta(uidSes)&&conta(uidSes).ativo)carregarApp();else{try{localStorage.removeItem(SESS)}catch(e){}escolher()}}

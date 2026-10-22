@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600&family=Atkinson+Hyperlegible+Next:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="/vendor/chart-4.4.1.umd.min.js"></script>
+<script src="vendor/chart-4.4.1.umd.min.js"></script>
 <style>
 /* Layout: app shell — sidebar de navegação + área de trabalho; ficha do colaborador abre em painel lateral */
 :root{
@@ -7223,7 +7223,7 @@ async function pacCarregarLinks(o){const e=ARQ.pacotes.get(o);if(e&&Date.now()-e
     ARQ.pacotes.set(o,{t:Date.now(),l:error?(e?.l||[]):data||[]});if(error)console.error(JSON.stringify({nivel:'erro',etapa:'pacote.ler',msg:error.message}));
     if(!e||JSON.stringify(e.l)!==JSON.stringify(ARQ.pacotes.get(o).l))arqRender()}finally{ARQ.busy.delete(k)}}
 const nomeSeguro=t=>String(t||'').replace(/[\\/:*?"<>|\u0000-\u001f]/g,'-').replace(/\s+/g,' ').trim().slice(0,90)||'arquivo';
-function carregarZip(){return window.JSZip?Promise.resolve():new Promise((ok,no)=>{const sc=document.createElement('script');sc.src='/vendor/jszip-3.10.1.min.js';sc.onload=ok;sc.onerror=()=>no(new Error('zip'));document.head.appendChild(sc)})}
+function carregarZip(){return window.JSZip?Promise.resolve():new Promise((ok,no)=>{const sc=document.createElement('script');sc.src='vendor/jszip-3.10.1.min.js';sc.onload=ok;sc.onerror=()=>no(new Error('zip'));document.head.appendChild(sc)})}
 let pacOcupado=false;
 async function pacZip(o){if(pacOcupado)return;const m=pacMontar(o);if(!m.itens.length)return toast('Nenhum arquivo selecionado.',true);
   pacOcupado=true;try{await carregarZip()}catch(e){pacOcupado=false;return toast('Não foi possível preparar o ZIP. Verifique a internet.',true)}
@@ -8360,6 +8360,6 @@ Object.assign(ACT_PERM,{propLogoRm:'editarCustoViagem'});
 rascSalvar=(function(prev){return function(f){if(f&&f.querySelector&&f.querySelector('input[type="password"]'))return;return prev.apply(this,arguments)}})(rascSalvar);
 render();</script>
 
-<script src="/demo.js"></script>
+<script src="demo-dados.js"></script><script src="demo.js"></script>
 </body>
 </html>

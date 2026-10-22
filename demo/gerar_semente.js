@@ -32,6 +32,7 @@ const CSP=JSON.parse(fs.readFileSync(path.join(DIST,'vercel.json'),'utf8')).head
 let SEM=JSON.stringify(S0);
 const srv=http.createServer((q,r)=>{const u=decodeURIComponent(q.url.split('?')[0]);
   if(u==='/demo-semente.json'){r.writeHead(200,{'Content-Type':'application/json'});return r.end(SEM)}
+  if(u==='/demo-dados.js'){r.writeHead(200,{'Content-Type':'text/javascript'});return r.end('window.NTEAM_DEMO_SEMENTE=null;')}
   let f=path.join(DIST,u);if(f.endsWith('/'))f+='index.html';if(!path.extname(f))f+='.html';
   fs.readFile(f,(e,d)=>{if(e){r.writeHead(404);return r.end()}r.writeHead(200,{'Content-Type':TIPOS[path.extname(f)]||'application/octet-stream','Content-Security-Policy':CSP});r.end(d)})});
 
